@@ -34,12 +34,12 @@ func (s *Service) CreateCredential(
 			ErrInvalidInput,
 		)
 	}
-	if err := s.providerFactory(token).VerifyToken(ctx); err != nil {
-		return model.CloudflareCredential{}, providerError(err)
-	}
 	ciphertext, nonce, fingerprint, hint, err := s.encryptor.Encrypt(token)
 	if err != nil {
 		return model.CloudflareCredential{}, err
+	}
+	if err := s.providerFactory(token).VerifyToken(ctx); err != nil {
+		return model.CloudflareCredential{}, providerError(err)
 	}
 
 	var count int
@@ -91,12 +91,12 @@ func (s *Service) UpdateCredential(
 	id int64,
 	token string,
 ) (model.CloudflareCredential, error) {
-	if err := s.providerFactory(token).VerifyToken(ctx); err != nil {
-		return model.CloudflareCredential{}, providerError(err)
-	}
 	ciphertext, nonce, fingerprint, hint, err := s.encryptor.Encrypt(token)
 	if err != nil {
 		return model.CloudflareCredential{}, err
+	}
+	if err := s.providerFactory(token).VerifyToken(ctx); err != nil {
+		return model.CloudflareCredential{}, providerError(err)
 	}
 	now := s.now().UTC()
 	query := s.db.Rebind(`

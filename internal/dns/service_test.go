@@ -122,3 +122,20 @@ func TestServiceCredentialZoneAndRemoteAuthoritativeSync(t *testing.T) {
 		t.Fatalf("failed sync changed cache %+v: %v", records, err)
 	}
 }
+
+func TestMissingEncryptionKeyFailsBeforeProviderCall(t *testing.T) {
+	t.Setenv("CREDENTIAL_ENCRYPTION_KEY", "")
+	provider := &fakeProvider{}
+	service := NewService(
+		nil,
+		credential.FromEnv(),
+		func(string) Provider { return provider },
+	)
+	_, err := service.CreateCredential(context.Background(), "primary", "test-token")
+	if !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("expected configuration error, got %v", err)
+	}
+	if provider.verified {
+		t.Fatal("provider must not receive token without a configured encryption key")
+	}
+}
