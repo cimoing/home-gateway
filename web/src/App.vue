@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import DNSManager from './components/DNSManager.vue'
 
 interface User {
   id: number
@@ -105,15 +106,11 @@ async function logout() {
       </form>
     </section>
 
-    <section v-else class="card">
-      <p class="eyebrow">HOME GATEWAY</p>
-      <h1>你好，{{ user.displayName || user.username }}</h1>
-      <p class="description">身份验证成功，网关服务运行正常。</p>
-      <div class="status healthy">
-        <span class="indicator" />
-        已安全登录
-      </div>
-      <button class="secondary-button" type="button" @click="logout">退出登录</button>
-    </section>
+    <DNSManager
+      v-else
+      :user-name="user.displayName || user.username"
+      @logout="logout"
+      @session-expired="user = null"
+    />
   </main>
 </template>

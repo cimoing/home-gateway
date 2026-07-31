@@ -7,6 +7,9 @@
 ```text
 cmd/server/       Go 服务入口
 internal/database/ SQLx 连接与数据库迁移
+internal/cloudflare/ Cloudflare v4 HTTP 客户端
+internal/credential/ API Token 加密
+internal/dns/      DNS 管理服务与 API
 internal/model/    数据模型
 internal/router/  Gin 路由
 web/              Vue 前端
@@ -125,11 +128,54 @@ docker run --rm -it `
 `SameSite=Lax` Cookie 持有令牌。会话默认有效期为 24 小时；连续失败登录会触发
 短期限流。HTTPS 部署时应设置 `SESSION_SECURE=true`。
 
+## Cloudflare DNS 管理
+
+登录后可在 Web 界面管理 API Token、绑定域名以及维护 A、AAAA、CNAME、TXT、
+MX、CAA 和 SRV 记录。记录查询默认读取本地缓存；创建、修改和删除会先写入
+Cloudflare，再更新缓存。“同步”操作会拉取全部远程分页并在单个数据库事务中
+更新缓存，Cloudflare 始终是权威数据源。
+
+创建 API Token 时应只授予目标 Zone 的以下最小权限：
+
+- `Zone / Zone / Read`
+- `Zone / DNS / Edit`
+
+Token 使用 AES-256-GCM 加密。运行服务前必须通过
+`CREDENTIAL_ENCRYPTION_KEY` 提供 Base64 编码的 32 字节主密钥；没有配置时服务
+仍可启动和登录，但凭据写入及 Cloudflare 操作会返回 503。PowerShell 生成示例：
+
+```powershell
+$bytes = New-Object byte[] 32
+$rng = New-Object Security.Cryptography.RNGCryptoServiceProvider
+$rng.GetBytes($bytes)
+$key = [Convert]::ToBase64String($bytes)
+$key
+```
+
+启动时传入密钥：
+
+```powershell
+docker run --rm -p 8080:8080 `
+  -e "CREDENTIAL_ENCRYPTION_KEY=$key" `
+  -v home-gateway-data:/data `
+  home-gateway:latest run
+```
+
+密钥不会写入数据库。必须将该密钥与 `/data` 数据卷分别安全备份；丢失或替换
+密钥后，已有 API Token 无法解密。不要将密钥提交到 Git 或写入镜像。
+
+受登录保护的 API 位于 `/api/dns`：
+
+- `/credentials`：列出、添加、更新和删除加密凭据
+- `/zones`：列出、绑定和移除域名，`POST /zones/:id/sync` 手动同步
+- `/zones/:id/records`：读取缓存以及远程记录增删改查
+
 ## 生产镜像
 
 ```powershell
 docker build -t home-gateway:latest .
 docker run --rm -p 8080:8080 `
+  -e "CREDENTIAL_ENCRYPTION_KEY=$key" `
   -v home-gateway-data:/data `
   home-gateway:latest run
 ```
