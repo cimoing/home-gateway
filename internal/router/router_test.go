@@ -1,0 +1,62 @@
+package router
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+)
+
+func TestHealth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	New().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+
+	if body := recorder.Body.String(); body != `{"status":"ok"}` {
+		t.Fatalf("unexpected response body: %s", body)
+	}
+}
+
+func TestServesWebAppAndSPAFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	webRoot := t.TempDir()
+	index := []byte("<html>home gateway</html>")
+	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), index, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"/", "/devices/overview"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		NewWithWebRoot(webRoot).ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s: expected status %d, got %d", path, http.StatusOK, recorder.Code)
+		}
+		if body := recorder.Body.String(); body != string(index) {
+			t.Fatalf("%s: unexpected response body: %s", path, body)
+		}
+	}
+}
+
+func TestUnknownAPIRouteDoesNotServeWebApp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/missing", nil)
+	NewWithWebRoot(t.TempDir()).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, recorder.Code)
+	}
+}

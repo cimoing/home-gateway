@@ -1,0 +1,14 @@
+.git
+.gitignore
+.idea
+.vscode
+bin
+*.exe
+*.test
+*.out
+web/node_modules
+web/dist
+web/.vite
+.env
+.env.*
+README.md
