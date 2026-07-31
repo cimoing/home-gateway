@@ -6,18 +6,22 @@ import (
 	"path/filepath"
 	"strings"
 
+	"home-gateway/internal/auth"
+
 	"github.com/gin-gonic/gin"
+	"github.com/jmoiron/sqlx"
 )
 
 // New creates the application's HTTP router.
-func New() *gin.Engine {
-	return NewWithWebRoot(os.Getenv("WEB_ROOT"))
+func New(databases ...*sqlx.DB) *gin.Engine {
+	return NewWithWebRoot(os.Getenv("WEB_ROOT"), databases...)
 }
 
 // NewWithWebRoot creates the router and optionally serves a built web app.
-func NewWithWebRoot(webRoot string) *gin.Engine {
+func NewWithWebRoot(webRoot string, databases ...*sqlx.DB) *gin.Engine {
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery())
+	_ = engine.SetTrustedProxies(nil)
 
 	api := engine.Group("/api")
 	api.GET("/health", func(c *gin.Context) {
@@ -25,6 +29,9 @@ func NewWithWebRoot(webRoot string) *gin.Engine {
 			"status": "ok",
 		})
 	})
+	if len(databases) > 0 && databases[0] != nil {
+		auth.NewHandler(auth.NewService(databases[0])).Register(api)
+	}
 
 	if webRoot != "" {
 		fileServer := http.FileServer(http.Dir(webRoot))

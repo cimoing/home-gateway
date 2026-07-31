@@ -40,7 +40,7 @@ func runServer(cmd *cobra.Command) error {
 
 	server := &http.Server{
 		Addr:              address,
-		Handler:           router.New(),
+		Handler:           router.New(db),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
