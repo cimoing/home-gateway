@@ -28,7 +28,7 @@ ENV SERVER_ADDR=:8080 \
 
 EXPOSE 8080 5173
 
-CMD ["sh", "-c", "go run ./cmd/server & backend_pid=$!; npm --prefix web run dev -- --host 0.0.0.0 & frontend_pid=$!; trap 'kill $backend_pid $frontend_pid' INT TERM; wait $backend_pid $frontend_pid"]
+CMD ["sh", "-c", "go run ./cmd/server run & backend_pid=$!; npm --prefix web run dev -- --host 0.0.0.0 & frontend_pid=$!; trap 'kill $backend_pid $frontend_pid' INT TERM; wait $backend_pid $frontend_pid"]
 
 FROM development AS test
 

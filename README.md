@@ -80,13 +80,46 @@ docker run --rm -p 8080:8080 `
 
 服务启动时会自动执行当前数据库方言对应的嵌入式迁移。
 
+## 命令行
+
+API 服务通过 `run` 子命令启动：
+
+```powershell
+docker run --rm -p 8080:8080 `
+  -v home-gateway-data:/data `
+  home-gateway:latest run
+```
+
+交互式创建用户及修改密码：
+
+```powershell
+docker run --rm -it `
+  -v home-gateway-data:/data `
+  home-gateway:latest user create admin
+
+docker run --rm -it `
+  -v home-gateway-data:/data `
+  home-gateway:latest user passwd admin
+```
+
+密码输入默认关闭终端回显并要求输入两次。自动化场景可从标准输入读取一次：
+
+```powershell
+"initial-password" | docker run --rm -i `
+  -v home-gateway-data:/data `
+  home-gateway:latest user create admin --password-stdin
+```
+
+用户名长度为 1 至 64 个字符且不能包含空白或控制字符；密码长度为 8 至 72
+字节。数据库只保存 bcrypt 哈希。
+
 ## 生产镜像
 
 ```powershell
 docker build -t home-gateway:latest .
 docker run --rm -p 8080:8080 `
   -v home-gateway-data:/data `
-  home-gateway:latest
+  home-gateway:latest run
 ```
 
 访问 `http://localhost:8080`。生产镜像采用多阶段构建，以非 root 用户运行，

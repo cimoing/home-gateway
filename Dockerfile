@@ -52,3 +52,4 @@ VOLUME ["/data"]
 STOPSIGNAL SIGTERM
 
 ENTRYPOINT ["/app/home-gateway"]
+CMD ["run"]
