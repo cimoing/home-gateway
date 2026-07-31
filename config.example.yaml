@@ -1,0 +1,4 @@
+bt:
+  enabled: true
+  download_dir: /data/downloads
+  listen_port: 42069
