@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: gateway_test
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: gateway_test
+      MYSQL_USER: gateway
+      MYSQL_PASSWORD: gateway
+      MYSQL_ROOT_PASSWORD: root
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h localhost -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent",
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+    tmpfs:
+      - /var/lib/mysql
+
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: development
+    command:
+      [
+        "sh",
+        "-c",
+        "go test ./... -count=1 && npm --prefix web run build",
+      ]
+    environment:
+      TEST_POSTGRES_DSN: postgres://gateway:gateway@postgres:5432/gateway_test?sslmode=disable
+      TEST_MYSQL_DSN: gateway:gateway@tcp(mysql:3306)/gateway_test?parseTime=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy

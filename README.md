@@ -6,6 +6,8 @@
 
 ```text
 cmd/server/       Go 服务入口
+internal/database/ SQLx 连接与数据库迁移
+internal/model/    数据模型
 internal/router/  Gin 路由
 web/              Vue 前端
 ```
@@ -26,6 +28,7 @@ docker run --rm -it `
   -p 5173:5173 `
   -v "${PWD}:/workspace" `
   -v home-gateway-node-modules:/workspace/web/node_modules `
+  -v home-gateway-data:/data `
   home-gateway:dev
 ```
 
@@ -38,14 +41,53 @@ docker run --rm -it `
 docker build -f Dockerfile.dev --target test -t home-gateway:test .
 ```
 
-该阶段会执行全部 Go 测试及 Vue 生产构建，任一失败都会中止镜像构建。
+该阶段使用 SQLite 执行全部 Go 测试及 Vue 生产构建。完整验证 SQLite、PostgreSQL
+和 MySQL：
+
+```powershell
+docker compose -f compose.test.yml up --build `
+  --abort-on-container-exit `
+  --exit-code-from tests
+docker compose -f compose.test.yml down -v
+```
+
+任一数据库迁移、约束测试或前端构建失败都会返回非零状态。
+
+## 数据库
+
+应用使用以下环境变量：
+
+- `DB_DRIVER`：`sqlite`、`pgsql`/`postgres` 或 `mysql`，默认为 `sqlite`
+- `DB_DSN`：数据库连接字符串；SQLite 默认值为 `/data/home-gateway.db`
+
+PostgreSQL 示例：
+
+```powershell
+docker run --rm -p 8080:8080 `
+  -e DB_DRIVER=pgsql `
+  -e "DB_DSN=postgres://gateway:password@database:5432/gateway?sslmode=disable" `
+  home-gateway:latest
+```
+
+MySQL 示例：
+
+```powershell
+docker run --rm -p 8080:8080 `
+  -e DB_DRIVER=mysql `
+  -e "DB_DSN=gateway:password@tcp(database:3306)/gateway?parseTime=true" `
+  home-gateway:latest
+```
+
+服务启动时会自动执行当前数据库方言对应的嵌入式迁移。
 
 ## 生产镜像
 
 ```powershell
 docker build -t home-gateway:latest .
-docker run --rm -p 8080:8080 home-gateway:latest
+docker run --rm -p 8080:8080 `
+  -v home-gateway-data:/data `
+  home-gateway:latest
 ```
 
 访问 `http://localhost:8080`。生产镜像采用多阶段构建，以非 root 用户运行，
-最终镜像仅包含静态 Go 二进制文件和 Vue 构建产物。
+最终镜像仅包含静态 Go 二进制文件、Vue 构建产物及可写的 SQLite 数据目录。

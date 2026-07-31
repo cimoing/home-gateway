@@ -8,9 +8,12 @@ COPY --from=node /usr/local/ /usr/local/
 
 WORKDIR /workspace
 
+RUN mkdir -p /data
+
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+    go mod download && \
+    cp -a /go/pkg/mod /opt/go-mod-cache
 
 COPY web/package.json web/package-lock.json ./web/
 RUN --mount=type=cache,target=/root/.npm \
@@ -18,7 +21,10 @@ RUN --mount=type=cache,target=/root/.npm \
 
 COPY . .
 
-ENV SERVER_ADDR=:8080
+ENV SERVER_ADDR=:8080 \
+    DB_DRIVER=sqlite \
+    DB_DSN=/data/home-gateway.db \
+    GOMODCACHE=/opt/go-mod-cache
 
 EXPOSE 8080 5173
 
@@ -26,8 +32,7 @@ CMD ["sh", "-c", "go run ./cmd/server & backend_pid=$!; npm --prefix web run dev
 
 FROM development AS test
 
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/root/.cache/go-build \
     go test ./...
 
 RUN npm --prefix web run build

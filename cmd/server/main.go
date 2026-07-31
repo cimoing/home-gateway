@@ -10,10 +10,30 @@ import (
 	"syscall"
 	"time"
 
+	"home-gateway/internal/database"
 	"home-gateway/internal/router"
 )
 
 func main() {
+	dbConfig, err := database.ConfigFromEnv()
+	if err != nil {
+		log.Fatalf("invalid database configuration: %v", err)
+	}
+
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer startupCancel()
+
+	db, err := database.Open(startupCtx, dbConfig)
+	if err != nil {
+		log.Fatalf("database connection failed: %v", err)
+	}
+	defer db.Close()
+
+	if err := database.Migrate(startupCtx, db, dbConfig.Driver); err != nil {
+		log.Fatalf("database migration failed: %v", err)
+	}
+	log.Printf("database ready using %s", dbConfig.Driver)
+
 	address := os.Getenv("SERVER_ADDR")
 	if address == "" {
 		address = ":8080"
