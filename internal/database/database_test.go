@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"home-gateway/internal/model"
+
+	"github.com/jmoiron/sqlx"
 )
 
 func TestConfigFromEnvDefaultsToSQLite(t *testing.T) {
@@ -159,5 +161,95 @@ func testDatabase(t *testing.T, config Config) {
 	}
 	if userID.Valid {
 		t.Fatal("expected login log user_id to be null after deleting user")
+	}
+
+	testDNSSchema(t, ctx, db, suffix)
+}
+
+func testDNSSchema(t *testing.T, ctx context.Context, db *sqlx.DB, suffix int64) {
+	t.Helper()
+	name := fmt.Sprintf("credential_%d", suffix)
+	fingerprint := fmt.Sprintf("%064x", suffix)
+	insertCredential := db.Rebind(`
+		INSERT INTO cloudflare_credentials
+		    (name, token_ciphertext, token_nonce, token_fingerprint, token_hint)
+		VALUES (?, ?, ?, ?, ?)
+	`)
+	result, err := db.ExecContext(
+		ctx,
+		insertCredential,
+		name,
+		[]byte("encrypted-token"),
+		[]byte("random-nonce"),
+		fingerprint,
+		"oken",
+	)
+	if err != nil {
+		t.Fatalf("insert Cloudflare credential: %v", err)
+	}
+	credentialID, err := result.LastInsertId()
+	if err != nil || credentialID == 0 {
+		query := db.Rebind(`SELECT id FROM cloudflare_credentials WHERE name = ?`)
+		if err := sqlx.GetContext(ctx, db, &credentialID, query, name); err != nil {
+			t.Fatalf("select Cloudflare credential: %v", err)
+		}
+	}
+	var ciphertext []byte
+	queryCiphertext := db.Rebind(`SELECT token_ciphertext FROM cloudflare_credentials WHERE id = ?`)
+	if err := sqlx.GetContext(ctx, db, &ciphertext, queryCiphertext, credentialID); err != nil {
+		t.Fatalf("select encrypted token: %v", err)
+	}
+	if string(ciphertext) != "encrypted-token" {
+		t.Fatalf("unexpected encrypted token bytes %q", ciphertext)
+	}
+
+	zoneProviderID := fmt.Sprintf("zone-%d", suffix)
+	zoneName := fmt.Sprintf("zone-%d.example.test", suffix)
+	insertZone := db.Rebind(`
+		INSERT INTO dns_zones (credential_id, provider_zone_id, name, status)
+		VALUES (?, ?, ?, ?)
+	`)
+	result, err = db.ExecContext(ctx, insertZone, credentialID, zoneProviderID, zoneName, "active")
+	if err != nil {
+		t.Fatalf("insert DNS zone: %v", err)
+	}
+	zoneID, err := result.LastInsertId()
+	if err != nil || zoneID == 0 {
+		query := db.Rebind(`SELECT id FROM dns_zones WHERE provider_zone_id = ?`)
+		if err := sqlx.GetContext(ctx, db, &zoneID, query, zoneProviderID); err != nil {
+			t.Fatalf("select DNS zone: %v", err)
+		}
+	}
+
+	insertRecord := db.Rebind(`
+		INSERT INTO dns_records
+		    (zone_id, provider_record_id, type, name, content, ttl, data_json, synced_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if _, err := db.ExecContext(
+		ctx,
+		insertRecord,
+		zoneID,
+		fmt.Sprintf("record-%d", suffix),
+		"A",
+		zoneName,
+		"192.0.2.1",
+		1,
+		"{}",
+		time.Now().UTC(),
+	); err != nil {
+		t.Fatalf("insert DNS record: %v", err)
+	}
+	deleteZone := db.Rebind(`DELETE FROM dns_zones WHERE id = ?`)
+	if _, err := db.ExecContext(ctx, deleteZone, zoneID); err != nil {
+		t.Fatalf("delete DNS zone: %v", err)
+	}
+	var records int
+	countRecords := db.Rebind(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`)
+	if err := sqlx.GetContext(ctx, db, &records, countRecords, zoneID); err != nil {
+		t.Fatalf("count DNS records: %v", err)
+	}
+	if records != 0 {
+		t.Fatal("expected DNS records to cascade delete with zone")
 	}
 }

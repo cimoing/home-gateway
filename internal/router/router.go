@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"home-gateway/internal/auth"
+	"home-gateway/internal/credential"
+	"home-gateway/internal/dns"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
@@ -30,7 +32,13 @@ func NewWithWebRoot(webRoot string, databases ...*sqlx.DB) *gin.Engine {
 		})
 	})
 	if len(databases) > 0 && databases[0] != nil {
-		auth.NewHandler(auth.NewService(databases[0])).Register(api)
+		authHandler := auth.NewHandler(auth.NewService(databases[0]))
+		authHandler.Register(api)
+		protected := api.Group("")
+		protected.Use(authHandler.RequireSession())
+		dns.NewHandler(
+			dns.NewService(databases[0], credential.FromEnv()),
+		).Register(protected)
 	}
 
 	if webRoot != "" {

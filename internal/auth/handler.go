@@ -11,6 +11,7 @@ import (
 )
 
 const sessionCookieName = "home_gateway_session"
+const userContextKey = "authenticatedUser"
 
 // Handler exposes authentication endpoints.
 type Handler struct {
@@ -30,6 +31,31 @@ func (h *Handler) Register(api *gin.RouterGroup) {
 	group.POST("/login", h.login)
 	group.GET("/session", h.session)
 	group.POST("/logout", h.logout)
+}
+
+// RequireSession rejects requests without an active database-backed session.
+func (h *Handler) RequireSession() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token, err := c.Cookie(sessionCookieName)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": ErrUnauthenticated.Error()})
+			c.Abort()
+			return
+		}
+		user, err := h.service.UserForSession(c.Request.Context(), token)
+		if err != nil {
+			if errors.Is(err, ErrUnauthenticated) {
+				h.clearSessionCookie(c)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": ErrUnauthenticated.Error()})
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "session lookup failed"})
+			}
+			c.Abort()
+			return
+		}
+		c.Set(userContextKey, user)
+		c.Next()
+	}
 }
 
 type loginRequest struct {

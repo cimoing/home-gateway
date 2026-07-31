@@ -1,11 +1,14 @@
 package router
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"home-gateway/internal/database"
 
 	"github.com/gin-gonic/gin"
 )
@@ -58,5 +61,27 @@ func TestUnknownAPIRouteDoesNotServeWebApp(t *testing.T) {
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expected status %d, got %d", http.StatusNotFound, recorder.Code)
+	}
+}
+
+func TestDNSRoutesRequireSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := database.Open(context.Background(), database.Config{
+		Driver: database.DriverSQLite,
+		DSN:    filepath.Join(t.TempDir(), "router.db"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(context.Background(), db, database.DriverSQLite); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/dns/zones", nil)
+	New(db).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
 	}
 }
