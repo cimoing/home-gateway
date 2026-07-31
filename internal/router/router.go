@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"home-gateway/internal/auth"
+	"home-gateway/internal/bt"
 	"home-gateway/internal/credential"
 	"home-gateway/internal/dns"
 
@@ -16,11 +17,20 @@ import (
 
 // New creates the application's HTTP router.
 func New(databases ...*sqlx.DB) *gin.Engine {
-	return NewWithWebRoot(os.Getenv("WEB_ROOT"), databases...)
+	return newRouter(os.Getenv("WEB_ROOT"), firstDatabase(databases), nil)
 }
 
 // NewWithWebRoot creates the router and optionally serves a built web app.
 func NewWithWebRoot(webRoot string, databases ...*sqlx.DB) *gin.Engine {
+	return newRouter(webRoot, firstDatabase(databases), nil)
+}
+
+// NewWithServices creates the production router with runtime services.
+func NewWithServices(database *sqlx.DB, btService *bt.Service) *gin.Engine {
+	return newRouter(os.Getenv("WEB_ROOT"), database, btService)
+}
+
+func newRouter(webRoot string, database *sqlx.DB, btService *bt.Service) *gin.Engine {
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery())
 	_ = engine.SetTrustedProxies(nil)
@@ -31,14 +41,17 @@ func NewWithWebRoot(webRoot string, databases ...*sqlx.DB) *gin.Engine {
 			"status": "ok",
 		})
 	})
-	if len(databases) > 0 && databases[0] != nil {
-		authHandler := auth.NewHandler(auth.NewService(databases[0]))
+	if database != nil {
+		authHandler := auth.NewHandler(auth.NewService(database))
 		authHandler.Register(api)
 		protected := api.Group("")
 		protected.Use(authHandler.RequireSession())
 		dns.NewHandler(
-			dns.NewService(databases[0], credential.FromEnv()),
+			dns.NewService(database, credential.FromEnv()),
 		).Register(protected)
+		if btService != nil {
+			bt.NewHandler(btService).Register(protected)
+		}
 	}
 
 	if webRoot != "" {
@@ -61,4 +74,11 @@ func NewWithWebRoot(webRoot string, databases ...*sqlx.DB) *gin.Engine {
 	}
 
 	return engine
+}
+
+func firstDatabase(databases []*sqlx.DB) *sqlx.DB {
+	if len(databases) == 0 {
+		return nil
+	}
+	return databases[0]
 }

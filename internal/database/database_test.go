@@ -164,6 +164,57 @@ func testDatabase(t *testing.T, config Config) {
 	}
 
 	testDNSSchema(t, ctx, db, suffix)
+	testBTSchema(t, ctx, db, suffix)
+}
+
+func testBTSchema(t *testing.T, ctx context.Context, db *sqlx.DB, suffix int64) {
+	t.Helper()
+	hash := fmt.Sprintf("%040x", suffix)
+	insertTask := db.Rebind(`
+		INSERT INTO bt_tasks
+		    (info_hash, source_type, source_value, name, save_path,
+		     desired_state, status, total_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	result, err := db.ExecContext(
+		ctx, insertTask, hash, "magnet", "magnet:?xt=urn:btih:"+hash,
+		"integration", "/data/downloads", "paused", "paused", 12,
+	)
+	if err != nil {
+		t.Fatalf("insert BT task: %v", err)
+	}
+	taskID, err := result.LastInsertId()
+	if err != nil || taskID == 0 {
+		query := db.Rebind(`SELECT id FROM bt_tasks WHERE info_hash = ?`)
+		if err := db.GetContext(ctx, &taskID, query, hash); err != nil {
+			t.Fatalf("select BT task: %v", err)
+		}
+	}
+	insertFile := db.Rebind(`
+		INSERT INTO bt_task_files
+		    (task_id, file_index, path, length, selected, priority)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`)
+	if _, err := db.ExecContext(
+		ctx, insertFile, taskID, 0, "bundle/file.bin", 12, true, 1,
+	); err != nil {
+		t.Fatalf("insert BT task file: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, insertFile, taskID, 0, "duplicate", 1, true, 1); err == nil {
+		t.Fatal("expected duplicate BT file index to be rejected")
+	}
+	deleteTask := db.Rebind(`DELETE FROM bt_tasks WHERE id = ?`)
+	if _, err := db.ExecContext(ctx, deleteTask, taskID); err != nil {
+		t.Fatalf("delete BT task: %v", err)
+	}
+	var files int
+	countFiles := db.Rebind(`SELECT COUNT(*) FROM bt_task_files WHERE task_id = ?`)
+	if err := db.GetContext(ctx, &files, countFiles, taskID); err != nil {
+		t.Fatalf("count BT files: %v", err)
+	}
+	if files != 0 {
+		t.Fatal("expected BT files to cascade delete with task")
+	}
 }
 
 func testDNSSchema(t *testing.T, ctx context.Context, db *sqlx.DB, suffix int64) {
