@@ -16,7 +16,11 @@ func TestUserCreateAndPasswordCommands(t *testing.T) {
 	t.Setenv("DB_DRIVER", "sqlite")
 	t.Setenv("DB_DSN", dsn)
 
-	executeCommand(t, []string{"user", "create", "admin", "--password-stdin"}, "initial-password\n")
+	executeCommand(
+		t,
+		[]string{"user", "create", "admin", "--password-stdin"},
+		"\xEF\xBB\xBFinitial-password\r\n",
+	)
 	assertCommandPassword(t, dsn, "admin", "initial-password")
 
 	executeCommand(t, []string{"user", "passwd", "admin", "--password-stdin"}, "updated-password\n")

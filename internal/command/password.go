@@ -18,7 +18,8 @@ func readPassword(cmd *cobra.Command, fromStdin bool) ([]byte, error) {
 		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("read password: %w", err)
 		}
-		return bytes.TrimRight([]byte(password), "\r\n"), nil
+		value := bytes.TrimRight([]byte(password), "\r\n")
+		return bytes.TrimPrefix(value, []byte{0xEF, 0xBB, 0xBF}), nil
 	}
 
 	input, ok := cmd.InOrStdin().(*os.File)
