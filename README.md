@@ -113,6 +113,18 @@ docker run --rm -it `
 用户名长度为 1 至 64 个字符且不能包含空白或控制字符；密码长度为 8 至 72
 字节。数据库只保存 bcrypt 哈希。
 
+## 登录
+
+登录页面由生产服务在 `http://localhost:8080` 提供。认证接口包括：
+
+- `POST /api/auth/login`：校验用户名和密码并创建会话
+- `GET /api/auth/session`：读取当前登录用户
+- `POST /api/auth/logout`：撤销当前会话
+
+会话令牌为随机值，数据库仅保存 SHA-256 哈希，浏览器通过 `HttpOnly`、
+`SameSite=Lax` Cookie 持有令牌。会话默认有效期为 24 小时；连续失败登录会触发
+短期限流。HTTPS 部署时应设置 `SESSION_SECURE=true`。
+
 ## 生产镜像
 
 ```powershell

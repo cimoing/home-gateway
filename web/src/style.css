@@ -38,6 +38,31 @@ main {
   backdrop-filter: blur(16px);
 }
 
+.login-card {
+  width: min(100%, 480px);
+}
+
+.compact-card {
+  width: auto;
+  padding: 24px 32px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 28px;
+  place-items: center;
+  border: 1px solid rgb(96 165 250 / 45%);
+  border-radius: 16px;
+  color: #bfdbfe;
+  background: rgb(37 99 235 / 20%);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  box-shadow: 0 12px 36px rgb(37 99 235 / 20%);
+}
+
 .eyebrow {
   margin: 0 0 12px;
   color: #60a5fa;
@@ -57,6 +82,75 @@ h1 {
   color: #94a3b8;
   font-size: 18px;
   line-height: 1.7;
+}
+
+form {
+  display: grid;
+  gap: 10px;
+}
+
+label {
+  margin-top: 10px;
+  color: #cbd5e1;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+input {
+  width: 100%;
+  padding: 13px 15px;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  outline: none;
+  color: #f8fafc;
+  background: rgb(15 23 42 / 75%);
+  font: inherit;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+input:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 18%);
+}
+
+button {
+  margin-top: 18px;
+  padding: 13px 18px;
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  background: #2563eb;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 150ms ease,
+    transform 150ms ease;
+}
+
+button:hover:not(:disabled) {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.secondary-button {
+  width: auto;
+  margin-top: 32px;
+  color: #cbd5e1;
+  background: #1e293b;
+}
+
+.error-message {
+  margin: 8px 0 0;
+  color: #fca5a5;
+  font-size: 14px;
 }
 
 .status {
