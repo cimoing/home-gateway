@@ -170,11 +170,55 @@ docker run --rm -p 8080:8080 `
 - `/zones`：列出、绑定和移除域名，`POST /zones/:id/sync` 手动同步
 - `/zones/:id/records`：读取缓存以及远程记录增删改查
 
+## BT 下载管理
+
+服务内嵌 `anacrolix/torrent`，支持磁力链接和 `.torrent` 文件、任务列表与实时
+进度、暂停/恢复、文件选择及优先级、删除任务以及可选删除下载数据。任务状态和
+文件选择保存在数据库中，服务重启后会自动恢复并续传。Web 管理接口均要求登录。
+
+默认读取 `/data/config.yaml`；文件不存在时下载目录为 `/data/downloads`，
+TCP/UDP 监听端口为 `42069`。可复制 `config.example.yaml`：
+
+```yaml
+bt:
+  enabled: true
+  download_dir: /data/downloads
+  listen_port: 42069
+```
+
+使用自定义配置文件：
+
+```powershell
+docker run --rm -p 8080:8080 `
+  -p 42069:42069/tcp `
+  -p 42069:42069/udp `
+  -v "${PWD}/config.yaml:/data/config.yaml:ro" `
+  -v home-gateway-data:/data `
+  home-gateway:latest run --config /data/config.yaml
+```
+
+Web 添加任务时可指定下载根目录内的相对子目录，只影响该新任务，不修改 YAML
+或已有任务。绝对路径和 `..` 目录穿越会被拒绝。删除任务时可选择保留文件或同时
+删除；数据删除仅针对数据库中记录且位于配置根目录内的种子文件。
+
+BT API 位于 `/api/bt`：
+
+- `GET /settings`：读取当前只读配置和引擎状态
+- `GET/POST /tasks`：查询任务，或通过 `/tasks/magnet`、`/tasks/torrent` 添加
+- `/tasks/:id/pause|resume`：暂停和恢复
+- `/tasks/:id/files`：查询及更新文件选择和优先级
+- `DELETE /tasks/:id?deleteData=true`：删除任务并可选删除数据
+
+数据库、任务元数据和默认下载文件均位于 `/data`，升级或迁移前应备份该数据卷。
+如修改 `bt.listen_port`，Docker 的 TCP 和 UDP 映射必须同步修改。
+
 ## 生产镜像
 
 ```powershell
 docker build -t home-gateway:latest .
 docker run --rm -p 8080:8080 `
+  -p 42069:42069/tcp `
+  -p 42069:42069/udp `
   -e "CREDENTIAL_ENCRYPTION_KEY=$key" `
   -v home-gateway-data:/data `
   home-gateway:latest run

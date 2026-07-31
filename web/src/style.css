@@ -97,7 +97,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   padding: 13px 15px;
   border: 1px solid #334155;
@@ -117,6 +118,11 @@ input:focus {
 }
 
 select:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 18%);
+}
+
+textarea:focus {
   border-color: #60a5fa;
   box-shadow: 0 0 0 3px rgb(59 130 246 / 18%);
 }
@@ -217,6 +223,28 @@ button:disabled {
   border: 1px solid rgb(148 163 184 / 16%);
   border-radius: 14px;
   background: rgb(15 23 42 / 70%);
+}
+
+.module-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.module-tabs button {
+  width: auto;
+  margin: 0;
+  color: #94a3b8;
+  background: #1e293b;
+}
+
+.module-tabs button.active {
+  color: #fff;
+  background: #0f766e;
+}
+
+.feature-view {
+  width: 100%;
 }
 
 .tabs button {
@@ -415,6 +443,196 @@ th {
   gap: 8px;
 }
 
+.bt-add-form,
+.settings-panel {
+  width: min(100%, 760px);
+  margin: 20px auto 0;
+}
+
+.bt-add-form textarea {
+  resize: vertical;
+}
+
+.bt-add-form small {
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.source-switch {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.source-switch button {
+  flex: 1;
+  margin: 0;
+  color: #94a3b8;
+  background: #1e293b;
+}
+
+.source-switch button.active {
+  color: #fff;
+  background: #2563eb;
+}
+
+.bt-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 180px auto;
+  gap: 10px;
+  margin: 20px 0 12px;
+}
+
+.bt-toolbar button {
+  margin: 0;
+}
+
+.bt-task-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.bt-task-card {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  padding: 18px;
+  border: 1px solid rgb(148 163 184 / 14%);
+  border-radius: 14px;
+  background: rgb(30 41 59 / 42%);
+  cursor: pointer;
+}
+
+.bt-task-card:hover {
+  border-color: rgb(96 165 250 / 45%);
+}
+
+.task-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.task-title-row,
+.file-heading,
+.task-detail > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-title-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-badge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #bfdbfe;
+  background: rgb(37 99 235 / 20%);
+  font-size: 12px;
+}
+
+.state-completed {
+  color: #86efac;
+  background: rgb(22 101 52 / 30%);
+}
+
+.state-error {
+  color: #fecaca;
+  background: rgb(127 29 29 / 35%);
+}
+
+.progress-track {
+  height: 7px;
+  margin: 13px 0 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #334155;
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #14b8a6);
+}
+
+.task-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.task-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.detail-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  overflow-y: auto;
+  place-items: center;
+  padding: 24px;
+  background: rgb(2 6 23 / 78%);
+  backdrop-filter: blur(5px);
+}
+
+.task-detail {
+  width: min(100%, 980px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.task-detail h2,
+.file-heading h3 {
+  margin: 0;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+
+.detail-grid > div {
+  padding: 14px;
+  border-radius: 12px;
+  background: rgb(30 41 59 / 55%);
+}
+
+.detail-grid dt {
+  margin-bottom: 5px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.detail-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-heading {
+  margin-bottom: 12px;
+}
+
+.file-heading p {
+  margin: 4px 0 0;
+  color: #94a3b8;
+}
+
+.file-heading button {
+  margin: 0;
+}
+
 @media (max-width: 520px) {
   .card {
     padding: 32px 24px;
@@ -458,5 +676,19 @@ th {
   .tabs button {
     padding: 10px 6px;
     font-size: 13px;
+  }
+
+  .bt-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .bt-task-card,
+  .task-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
   }
 }

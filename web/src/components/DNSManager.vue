@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { api } from '../api/client'
 
 interface Credential {
   id: number
@@ -27,9 +28,6 @@ interface RecordItem {
   dataJson: string
   comment: string
 }
-
-const props = defineProps<{ userName: string }>()
-const emit = defineEmits<{ logout: []; sessionExpired: [] }>()
 
 const tabs = ['credentials', 'zones', 'records'] as const
 type Tab = (typeof tabs)[number]
@@ -72,22 +70,6 @@ onMounted(async () => {
   await Promise.all([loadCredentials(), loadZones()])
   loading.value = false
 })
-
-async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: init?.body ? { 'Content-Type': 'application/json', ...init.headers } : init?.headers,
-  })
-  if (response.status === 401) {
-    emit('sessionExpired')
-    throw new Error('登录已过期，请重新登录。')
-  }
-  if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { error?: string }
-    throw new Error(data.error || `请求失败（${response.status}）`)
-  }
-  return response.status === 204 ? (undefined as T) : ((await response.json()) as T)
-}
 
 async function run(action: () => Promise<void>, success = '') {
   error.value = ''
@@ -300,18 +282,7 @@ function resetRecordForm() {
 </script>
 
 <template>
-  <section class="dashboard">
-    <header class="dashboard-header">
-      <div>
-        <p class="eyebrow">HOME GATEWAY</p>
-        <h1>DNS 管理</h1>
-        <p class="muted">你好，{{ props.userName }}</p>
-      </div>
-      <button class="secondary-button header-button" type="button" @click="emit('logout')">
-        退出登录
-      </button>
-    </header>
-
+  <section class="feature-view">
     <nav class="tabs" aria-label="DNS 管理导航">
       <button :class="{ active: activeTab === 'credentials' }" @click="switchTab('credentials')">
         API 密钥

@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags="-s -w" \
       -o /out/home-gateway \
       ./cmd/server && \
-    mkdir -p /out/data && \
+    mkdir -p /out/data/downloads && \
     touch /out/data/.keep
 
 FROM gcr.io/distroless/static-debian12:nonroot
@@ -45,7 +45,7 @@ ENV GIN_MODE=release \
     DB_DRIVER=sqlite \
     DB_DSN=/data/home-gateway.db
 
-EXPOSE 8080
+EXPOSE 8080 42069/tcp 42069/udp
 
 VOLUME ["/data"]
 

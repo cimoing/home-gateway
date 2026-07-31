@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import DNSManager from './components/DNSManager.vue'
+import { setUnauthorizedHandler } from './api/client'
+import AppShell from './components/AppShell.vue'
 
 interface User {
   id: number
@@ -18,6 +19,9 @@ const form = reactive({
 })
 
 onMounted(async () => {
+  setUnauthorizedHandler(() => {
+    user.value = null
+  })
   try {
     const response = await fetch('/api/auth/session')
     if (response.ok) {
@@ -106,11 +110,10 @@ async function logout() {
       </form>
     </section>
 
-    <DNSManager
+    <AppShell
       v-else
       :user-name="user.displayName || user.username"
       @logout="logout"
-      @session-expired="user = null"
     />
   </main>
 </template>
