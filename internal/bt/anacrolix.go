@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -14,21 +15,39 @@ import (
 
 // AnacrolixEngine adapts github.com/anacrolix/torrent to Engine.
 type AnacrolixEngine struct {
-	client *torrent.Client
-	mu     sync.RWMutex
-	tasks  map[string]*anacrolixTask
+	client         *torrent.Client
+	rootPath       string
+	rootStorage    storage.ClientImplCloser
+	mu             sync.RWMutex
+	tasks          map[string]*anacrolixTask
+	customStorages map[string]*sharedStorage
+}
+
+type sharedStorage struct {
+	impl storage.ClientImplCloser
+	refs int
 }
 
 // NewAnacrolixEngine starts a process-wide BitTorrent client.
 func NewAnacrolixEngine(downloadDir string, listenPort int) (*AnacrolixEngine, error) {
+	rootPath := filepath.Clean(downloadDir)
+	rootStorage := storage.NewFile(rootPath)
 	config := torrent.NewDefaultClientConfig()
-	config.DataDir = downloadDir
+	config.DataDir = rootPath
+	config.DefaultStorage = rootStorage
 	config.ListenPort = listenPort
 	client, err := torrent.NewClient(config)
 	if err != nil {
+		_ = rootStorage.Close()
 		return nil, fmt.Errorf("start BitTorrent client: %w", err)
 	}
-	return &AnacrolixEngine{client: client, tasks: make(map[string]*anacrolixTask)}, nil
+	return &AnacrolixEngine{
+		client:         client,
+		rootPath:       rootPath,
+		rootStorage:    rootStorage,
+		tasks:          make(map[string]*anacrolixTask),
+		customStorages: make(map[string]*sharedStorage),
+	}, nil
 }
 
 func (e *AnacrolixEngine) AddMagnet(uri string, savePath string) (EngineTask, error) {
@@ -55,18 +74,21 @@ func (e *AnacrolixEngine) addSpec(
 	spec *torrent.TorrentSpec,
 	savePath string,
 ) (EngineTask, error) {
-	fileStorage := storage.NewFile(savePath)
-	spec.Storage = fileStorage
+	storageKey := ""
+	if filepath.Clean(savePath) != e.rootPath {
+		storageKey = filepath.Clean(savePath)
+		spec.Storage = e.acquireStorage(storageKey)
+	}
 	task, added, err := e.client.AddTorrentSpec(spec)
 	if err != nil {
-		_ = fileStorage.Close()
+		e.releaseStorage(storageKey)
 		return nil, fmt.Errorf("add torrent: %w", err)
 	}
 	if !added {
-		_ = fileStorage.Close()
+		e.releaseStorage(storageKey)
 		return nil, ErrConflict
 	}
-	wrapped := &anacrolixTask{torrent: task, storage: fileStorage}
+	wrapped := &anacrolixTask{torrent: task, storageKey: storageKey}
 	hash := wrapped.InfoHash()
 	e.mu.Lock()
 	e.tasks[hash] = wrapped
@@ -93,30 +115,65 @@ func (e *AnacrolixEngine) Remove(infoHash string) error {
 		return ErrNotFound
 	}
 	task.torrent.Drop()
-	if err := task.storage.Close(); err != nil {
-		return fmt.Errorf("close torrent storage: %w", err)
-	}
+	e.releaseStorage(task.storageKey)
 	return nil
 }
 
 func (e *AnacrolixEngine) Close() error {
 	e.mu.Lock()
-	tasks := e.tasks
 	e.tasks = make(map[string]*anacrolixTask)
 	e.mu.Unlock()
 	var errs []error
 	errs = append(errs, e.client.Close()...)
-	for _, task := range tasks {
-		if err := task.storage.Close(); err != nil {
+	e.mu.Lock()
+	for key, entry := range e.customStorages {
+		if err := entry.impl.Close(); err != nil {
 			errs = append(errs, err)
 		}
+		delete(e.customStorages, key)
+	}
+	e.mu.Unlock()
+	if err := e.rootStorage.Close(); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }
 
+func (e *AnacrolixEngine) acquireStorage(path string) storage.ClientImplCloser {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if entry, ok := e.customStorages[path]; ok {
+		entry.refs++
+		return entry.impl
+	}
+	impl := storage.NewFile(path)
+	e.customStorages[path] = &sharedStorage{impl: impl, refs: 1}
+	return impl
+}
+
+func (e *AnacrolixEngine) releaseStorage(path string) {
+	if path == "" {
+		return
+	}
+	e.mu.Lock()
+	entry, ok := e.customStorages[path]
+	if !ok {
+		e.mu.Unlock()
+		return
+	}
+	entry.refs--
+	if entry.refs > 0 {
+		e.mu.Unlock()
+		return
+	}
+	delete(e.customStorages, path)
+	e.mu.Unlock()
+	_ = entry.impl.Close()
+}
+
 type anacrolixTask struct {
-	torrent *torrent.Torrent
-	storage storage.ClientImplCloser
+	torrent    *torrent.Torrent
+	storageKey string
 }
 
 func (t *anacrolixTask) InfoHash() string {
@@ -148,18 +205,21 @@ func (t *anacrolixTask) Metadata() TaskMetadata {
 
 func (t *anacrolixTask) Stats() TaskStats {
 	stats := t.torrent.Stats()
-	files := t.torrent.Files()
-	fileCompleted := make(map[int]int64, len(files))
-	for index, file := range files {
-		fileCompleted[index] = file.BytesCompleted()
-	}
-	return TaskStats{
-		CompletedBytes:  t.torrent.BytesCompleted(),
+	result := TaskStats{
 		DownloadedBytes: stats.BytesReadUsefulData.Int64(),
 		UploadedBytes:   stats.BytesWrittenData.Int64(),
 		ActivePeers:     stats.ActivePeers,
-		FileCompleted:   fileCompleted,
+		FileCompleted:   make(map[int]int64),
 	}
+	if t.torrent.Info() == nil {
+		return result
+	}
+	files := t.torrent.Files()
+	result.CompletedBytes = t.torrent.BytesCompleted()
+	for index, file := range files {
+		result.FileCompleted[index] = file.BytesCompleted()
+	}
+	return result
 }
 
 func (t *anacrolixTask) Pause() {
