@@ -38,6 +38,34 @@ docker run --rm -it `
 前端地址为 `http://localhost:5173`，API 健康检查地址为
 `http://localhost:8080/api/health`。前端支持 Vite 热更新；修改 Go 代码后需重启容器。
 
+## Docker Compose 本地运行
+
+`compose.yml` 会构建生产镜像，并启动 Home Gateway 与 PostgreSQL 18。首次运行先复制
+环境变量模板，并替换数据库密码及凭据加密主密钥：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+`CREDENTIAL_ENCRYPTION_KEY` 必须是 Base64 编码的 32 字节随机值。配置完成后启动：
+
+```powershell
+docker compose up -d --build
+docker compose ps
+```
+
+Web 地址为 `http://localhost:8080`，PostgreSQL 默认映射到本机 `5432`，BT 使用
+`42069/tcp` 和 `42069/udp`。数据库与下载数据分别保存在
+`postgres-data`、`app-data` 命名卷中。查看日志和停止服务：
+
+```powershell
+docker compose logs -f app
+docker compose down
+```
+
+`docker compose down` 会保留数据卷；只有明确需要清空全部数据库和下载数据时才使用
+`docker compose down -v`。
+
 ## 测试
 
 ```powershell
