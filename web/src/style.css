@@ -633,6 +633,13 @@ th {
   margin: 0;
 }
 
+.file-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .settings-form {
   display: grid;
   gap: 14px;

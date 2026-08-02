@@ -32,6 +32,41 @@ const selectedBytes = computed(() =>
   ),
 )
 
+const VIDEO_EXTENSIONS = new Set([
+  '3g2', '3gp', 'asf', 'avi', 'flv', 'm2ts', 'm4v', 'mkv', 'mov', 'mp4', 'mpeg',
+  'mpg', 'mts', 'rm', 'rmvb', 'ts', 'vob', 'webm', 'wmv',
+])
+const LARGE_FILE_BYTES = 10 * 1024 * 1024
+
+function fileExtension(path: string) {
+  const name = path.split(/[/\\]/).pop() || path
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0 || dot === name.length - 1) return ''
+  return name.slice(dot + 1).toLowerCase()
+}
+
+function isVideoFile(path: string) {
+  return VIDEO_EXTENSIONS.has(fileExtension(path))
+}
+
+function selectMatching(match: (file: BTFile) => boolean) {
+  priorities.value = Object.fromEntries(
+    props.files.map((file) => {
+      if (!match(file)) return [file.index, 0]
+      const current = Number(priorities.value[file.index] || 0)
+      return [file.index, current > 0 ? current : 1]
+    }),
+  )
+}
+
+function selectVideosOnly() {
+  selectMatching((file) => isVideoFile(file.path))
+}
+
+function selectLargeFilesOnly() {
+  selectMatching((file) => file.length >= LARGE_FILE_BYTES)
+}
+
 function save() {
   emit(
     'saveFiles',
@@ -113,7 +148,25 @@ function sourceLabel(source: string) {
 
       <div class="file-heading">
         <div><h3>文件选择</h3><p>已选择 {{ formatBytes(selectedBytes) }}</p></div>
-        <button :disabled="busy || !files.length" @click="save">保存选择</button>
+        <div class="file-heading-actions">
+          <button
+            type="button"
+            class="small-button secondary-button"
+            :disabled="busy || !files.length"
+            @click="selectVideosOnly"
+          >
+            只下载视频
+          </button>
+          <button
+            type="button"
+            class="small-button secondary-button"
+            :disabled="busy || !files.length"
+            @click="selectLargeFilesOnly"
+          >
+            只下载 10MB 以上
+          </button>
+          <button :disabled="busy || !files.length" @click="save">保存选择</button>
+        </div>
       </div>
       <p v-if="!files.length" class="empty-state">元数据尚未就绪。</p>
       <div v-else class="record-table-wrap file-table">

@@ -142,10 +142,14 @@ func (e *AnacrolixEngine) Remove(infoHash string) error {
 }
 
 func (e *AnacrolixEngine) Stats() EngineStats {
-	clientStats := e.client.ConnStats()
+	// Prefer PeerConns+WebSeeds payload counters over raw BytesRead/BytesWritten,
+	// which include handshake, extension, keepalive, and encryption framing.
+	clientStats := e.client.Stats()
+	downloaded, uploaded := payloadBytes(clientStats.PeerConns)
+	webDown, webUp := payloadBytes(clientStats.WebSeeds)
 	result := EngineStats{
-		DownloadedBytes: clientStats.BytesReadUsefulData.Int64(),
-		UploadedBytes:   clientStats.BytesWrittenData.Int64(),
+		DownloadedBytes: downloaded + webDown,
+		UploadedBytes:   uploaded + webUp,
 	}
 	for _, server := range e.client.DhtServers() {
 		stats, ok := server.Stats().(dht.ServerStats)
@@ -263,9 +267,10 @@ func (t *anacrolixTask) Metadata() TaskMetadata {
 
 func (t *anacrolixTask) Stats() TaskStats {
 	stats := t.torrent.Stats()
+	downloaded, uploaded := payloadBytes(stats.ConnStats)
 	result := TaskStats{
-		DownloadedBytes: stats.BytesReadUsefulData.Int64(),
-		UploadedBytes:   stats.BytesWrittenData.Int64(),
+		DownloadedBytes: downloaded,
+		UploadedBytes:   uploaded,
 		ActivePeers:     stats.ActivePeers,
 		FileCompleted:   make(map[int]int64),
 	}
@@ -289,16 +294,23 @@ func (t *anacrolixTask) Peers() []PeerInfo {
 			address = conn.RemoteAddr.String()
 		}
 		stats := conn.Stats()
+		downloaded, uploaded := payloadBytes(stats.ConnStats)
 		peers = append(peers, PeerInfo{
 			Address:    address,
 			PeerID:     formatPeerID(conn.PeerID),
 			Network:    conn.Network,
 			Source:     string(conn.Discovery),
-			Downloaded: stats.BytesReadUsefulData.Int64(),
-			Uploaded:   stats.BytesWrittenData.Int64(),
+			Downloaded: downloaded,
+			Uploaded:   uploaded,
 		})
 	}
 	return peers
+}
+
+// payloadBytes returns torrent file piece payload totals.
+// BytesRead/BytesWritten are intentionally ignored: those include protocol chatter.
+func payloadBytes(stats torrent.ConnStats) (downloaded, uploaded int64) {
+	return stats.BytesReadData.Int64(), stats.BytesWrittenData.Int64()
 }
 
 func (t *anacrolixTask) Pause() {

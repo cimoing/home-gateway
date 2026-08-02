@@ -57,6 +57,8 @@ type FileSelection struct {
 }
 
 // TaskStats contains cumulative counters and live gauges.
+// DownloadedBytes/UploadedBytes are torrent file payload only (piece data),
+// never wire/protocol chatter such as handshake, bitfield, have, or keepalive.
 type TaskStats struct {
 	CompletedBytes  int64
 	DownloadedBytes int64
@@ -66,6 +68,7 @@ type TaskStats struct {
 }
 
 // PeerInfo describes one connected peer for a task.
+// Downloaded/Uploaded and rates are file payload only.
 type PeerInfo struct {
 	Address      string `json:"address"`
 	PeerID       string `json:"peerId"`
@@ -78,6 +81,7 @@ type PeerInfo struct {
 }
 
 // EngineStats contains process-wide BitTorrent gauges.
+// DownloadedBytes/UploadedBytes are file payload only across all torrents.
 type EngineStats struct {
 	DHTNodes        int
 	DHTGoodNodes    int
