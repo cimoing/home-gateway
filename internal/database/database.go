@@ -3,6 +3,8 @@ package database
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -13,6 +15,10 @@ import (
 // Open establishes and verifies a SQLite database connection.
 func Open(ctx context.Context, config Config) (*sqlx.DB, error) {
 	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+
+	if err := ensureSQLiteDirectory(config.DSN); err != nil {
 		return nil, err
 	}
 
@@ -45,4 +51,26 @@ func sqliteDSN(raw string) (string, error) {
 		separator = "&"
 	}
 	return raw + separator + "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", nil
+}
+
+func ensureSQLiteDirectory(dsn string) error {
+	path := strings.TrimSpace(dsn)
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file::memory:") {
+		return nil
+	}
+	if query := strings.IndexByte(path, '?'); query >= 0 {
+		path = path[:query]
+	}
+	path = strings.TrimPrefix(path, "file:")
+	if path == "" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if dir == "." || dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("create database directory: %w", err)
+	}
+	return nil
 }

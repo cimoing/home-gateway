@@ -5,7 +5,8 @@ bt:
   # storage_backend: local
   # When storage_backend is set, download_dir is a relative path on that backend.
   # When unset, download_dir is a local filesystem path.
-  download_dir: /data/downloads
+  # Relative to the DATA directory (default "." / container "/data").
+  download_dir: bt/downloads
   listen_port: 42069
   # 0 = unlimited (bytes per second)
   download_limit_bps: 0
@@ -39,7 +40,7 @@ storage:
     - name: local
       type: local
       config:
-        root: /data/downloads
+        root: bt/downloads
     # - name: nas
     #   type: smb
     #   config:

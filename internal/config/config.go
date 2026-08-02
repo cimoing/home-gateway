@@ -9,13 +9,15 @@ import (
 	"regexp"
 	"strings"
 
+	"home-gateway/internal/datadir"
+
 	"github.com/goccy/go-yaml"
 )
 
 const (
-	DefaultPath            = "/data/config.yaml"
-	DefaultDownloadDir     = "/data/downloads"
-	DefaultStagingDir      = "/data/.bt-staging"
+	DefaultPath            = "/config/config.yaml"
+	DefaultDownloadDir     = "bt/downloads"
+	DefaultStagingDir      = "bt/.staging"
 	DefaultListenPort      = 42069
 	DefaultSyncStrategy    = "complete"
 	DefaultSyncConcurrency = 2
@@ -192,7 +194,7 @@ func normalize(config Config, configPath string) (Config, error) {
 	}
 	config.Storage = expanded
 
-	if err := resolveBTPaths(&config, configPath); err != nil {
+	if err := resolveBTPaths(&config); err != nil {
 		return Config{}, err
 	}
 
@@ -204,7 +206,7 @@ func normalize(config Config, configPath string) (Config, error) {
 	return config, nil
 }
 
-func resolveBTPaths(config *Config, configPath string) error {
+func resolveBTPaths(config *Config) error {
 	config.BT.StorageBackend = strings.TrimSpace(config.BT.StorageBackend)
 	downloadDir := strings.TrimSpace(config.BT.DownloadDir)
 	if downloadDir == "" {
@@ -214,20 +216,16 @@ func resolveBTPaths(config *Config, configPath string) error {
 	config.BT.StoragePrefix = ""
 
 	if config.BT.StorageBackend == "" {
-		if !filepath.IsAbs(downloadDir) {
-			base := filepath.Dir(configPath)
-			downloadDir = filepath.Join(base, downloadDir)
-		}
-		absolute, err := filepath.Abs(downloadDir)
+		absolute, err := datadir.Resolve(downloadDir)
 		if err != nil {
 			return fmt.Errorf("resolve bt.download_dir: %w", err)
 		}
-		config.BT.DownloadDir = filepath.Clean(absolute)
-		config.BT.EngineDir = config.BT.DownloadDir
+		config.BT.DownloadDir = absolute
+		config.BT.EngineDir = absolute
 		return nil
 	}
 
-	// Legacy default is an absolute local path; with a storage backend it means "backend root".
+	// The default download dir means "backend root" when a storage backend is selected.
 	if downloadDir == DefaultDownloadDir {
 		downloadDir = ""
 		config.BT.DownloadDir = ""
@@ -269,7 +267,11 @@ func resolveBTPaths(config *Config, configPath string) error {
 		config.BT.EngineDir = filepath.Clean(engineDir)
 		return nil
 	case "smb", "s3":
-		config.BT.EngineDir = DefaultStagingDir
+		staging, err := datadir.Resolve(DefaultStagingDir)
+		if err != nil {
+			return fmt.Errorf("resolve bt staging dir: %w", err)
+		}
+		config.BT.EngineDir = staging
 		return nil
 	default:
 		return fmt.Errorf("bt.storage_backend type %q is unsupported", backend.Type)
@@ -404,6 +406,17 @@ func expandStorage(storage StorageConfig) (StorageConfig, error) {
 				return StorageConfig{}, fmt.Errorf("storage.backends[%d].config.%s: %w", index, key, err)
 			}
 			backend.Config[key] = expanded
+		}
+		if backend.Type == "local" {
+			root, _ := backend.Config["root"].(string)
+			root = strings.TrimSpace(root)
+			if root != "" {
+				resolved, err := datadir.Resolve(root)
+				if err != nil {
+					return StorageConfig{}, fmt.Errorf("storage.backends[%d].config.root: %w", index, err)
+				}
+				backend.Config["root"] = resolved
+			}
 		}
 		if backend.Secret != "" {
 			expanded, err := ExpandEnv(backend.Secret)

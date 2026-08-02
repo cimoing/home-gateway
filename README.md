@@ -32,7 +32,8 @@ docker run --rm -it `
   -p 5173:5173 `
   -v "${PWD}:/workspace" `
   -v home-gateway-node-modules:/workspace/web/node_modules `
-  -v home-gateway-data:/data `
+  -v "${PWD}/config:/config" `
+  -v "${PWD}/data:/data" `
   home-gateway:dev
 ```
 
@@ -41,26 +42,36 @@ docker run --rm -it `
 
 ## Docker Compose 本地运行
 
-`compose.yml` 构建生产镜像并以嵌入式 SQLite 运行。首次可复制环境变量模板，并按需
-设置 `config.yaml` 中 `${VAR}` 引用的密钥（如 `CF_API_TOKEN`、`SMB_PASSWORD`）：
+`compose.yml` 构建生产镜像并以嵌入式 SQLite 运行，默认启用 IPv6 网络。首次可复制
+环境变量与配置模板，并按需设置 `config.yaml` 中 `${VAR}` 引用的密钥：
 
 ```powershell
 Copy-Item .env.example .env
-Copy-Item config.example.yaml config.yaml
+New-Item -ItemType Directory -Force config, data | Out-Null
+Copy-Item config.example.yaml config/config.yaml
 docker compose up -d --build
 docker compose ps
 ```
 
-Web 地址为 `http://localhost:8080`，BT 使用 `42069/tcp` 与 `42069/udp`。SQLite、
-配置与下载数据保存在 `app-data` 命名卷中。查看日志和停止服务：
+Web 地址为 `http://localhost:8080`，BT 使用 `42069/tcp` 与 `42069/udp`。
+
+容器通过 `DATA=/data` 设置数据根目录；配置与数据中的默认路径均为相对路径：
+
+| 用途 | 路径 |
+|------|------|
+| 配置文件 | `/config/config.yaml`（主机 `./config`） |
+| 数据根 `DATA` | `/data`（主机 `./data`） |
+| SQLite | `$DATA/db/home-gateway.db` |
+| 下载目录 | `$DATA/bt/downloads` |
+
+查看日志和停止服务：
 
 ```powershell
 docker compose logs -f app
 docker compose down
 ```
 
-`docker compose down` 会保留数据卷；只有明确需要清空全部数据时才使用
-`docker compose down -v`。
+主机 Docker 需启用 IPv6（`daemon.json` 中 `"ipv6": true`）后，compose 默认网络才会真正下发 IPv6 地址。
 
 ## 测试
 
@@ -83,8 +94,9 @@ docker compose -f compose.test.yml down -v
 
 应用仅支持嵌入式 SQLite，相关环境变量：
 
+- `DATA`：数据根目录（默认 `.`；容器内为 `/data`），相对路径均基于此解析
 - `DB_DRIVER`：仅允许 `sqlite`（默认）
-- `DB_DSN`：SQLite 文件路径，默认 `/data/home-gateway.db`
+- `DB_DSN`：SQLite 路径，默认相对路径 `db/home-gateway.db`（相对 `DATA`）
 
 服务启动时会自动执行嵌入式 SQLite 迁移。用户密码与 BT 任务状态保存在该库中。
 
@@ -94,7 +106,8 @@ API 服务通过 `run` 子命令启动：
 
 ```powershell
 docker run --rm -p 8080:8080 `
-  -v home-gateway-data:/data `
+  -v "${PWD}/config:/config" `
+  -v "${PWD}/data:/data" `
   home-gateway:latest run
 ```
 
@@ -102,11 +115,13 @@ docker run --rm -p 8080:8080 `
 
 ```powershell
 docker run --rm -it `
-  -v home-gateway-data:/data `
+  -v "${PWD}/config:/config" `
+  -v "${PWD}/data:/data" `
   home-gateway:latest user create admin
 
 docker run --rm -it `
-  -v home-gateway-data:/data `
+  -v "${PWD}/config:/config" `
+  -v "${PWD}/data:/data" `
   home-gateway:latest user passwd admin
 ```
 
@@ -114,7 +129,8 @@ docker run --rm -it `
 
 ```powershell
 "initial-password" | docker run --rm -i `
-  -v home-gateway-data:/data `
+  -v "${PWD}/config:/config" `
+  -v "${PWD}/data:/data" `
   home-gateway:latest user create admin --password-stdin
 ```
 
@@ -135,11 +151,11 @@ docker run --rm -it `
 
 ## 配置文件
 
-默认读取 `/data/config.yaml`（见 `config.example.yaml`）：
+默认读取 `/config/config.yaml`（见 `config.example.yaml`）：
 
 - `bt.*`：下载引擎参数（部分可在 Web 设置页写回）
   - `bt.storage_backend`：可选，默认存储后端名称；留空则使用本地文件系统
-  - `bt.download_dir`：未选后端时为本地路径；选中后端时为该后端上的相对目录
+  - `bt.download_dir`：未选后端时为相对 `DATA` 的本地路径（默认 `bt/downloads`）；选中后端时为该后端上的相对目录
   - `bt.block`：屏蔽规则（客户端、Peer ID、端口、IP/CIDR）；Peers 列表右键可追加，支持热加载
   - `POST /api/bt/block`：追加一条屏蔽规则并写回 YAML
 - `storage.backends[]`：按**名称**定义 local / smb / s3；密钥用 `${ENV}`
@@ -181,9 +197,9 @@ BT 任务状态、文件选择与同步进度保存在 SQLite；下载内容在�
 docker run --rm -p 8080:8080 `
   -p 42069:42069/tcp `
   -p 42069:42069/udp `
-  -v "${PWD}/config.yaml:/data/config.yaml:ro" `
-  -v home-gateway-data:/data `
-  home-gateway:latest run --config /data/config.yaml
+  -v "${PWD}/config:/config" `
+  -v "${PWD}/data:/data" `
+  home-gateway:latest run
 ```
 
 Web 添加任务时可指定相对子目录与存储后端名称。绝对路径和 `..` 目录穿越会被拒绝。
@@ -196,7 +212,7 @@ BT API 位于 `/api/bt`：
 - `/tasks/:id/files`：查询及更新文件选择和优先级
 - `DELETE /tasks/:id?deleteData=true`：删除任务并可选删除数据
 
-数据库、任务元数据和默认下载文件均位于 `/data`，升级或迁移前应备份该数据卷。
+配置位于 `/config`；数据库与下载内容位于 `DATA` 下的相对路径（`db/`、`bt/downloads/`），升级或迁移前应备份这两个目录。
 如修改 `bt.listen_port`，Docker 的 TCP 和 UDP 映射必须同步修改。
 
 ## 生产镜像
@@ -206,9 +222,10 @@ docker build -t home-gateway:latest .
 docker run --rm -p 8080:8080 `
   -p 42069:42069/tcp `
   -p 42069:42069/udp `
-  -v home-gateway-data:/data `
+  -v "${PWD}/config:/config" `
+  -v "${PWD}/data:/data" `
   home-gateway:latest run
 ```
 
 访问 `http://localhost:8080`。生产镜像采用多阶段构建，以非 root 用户运行，
-最终镜像仅包含静态 Go 二进制文件、Vue 构建产物及可写的 SQLite 数据目录。
+最终镜像仅包含静态 Go 二进制文件、Vue 构建产物，以及 `/config` 与 `/data` 卷挂载点。

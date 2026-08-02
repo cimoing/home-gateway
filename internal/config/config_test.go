@@ -8,6 +8,7 @@ import (
 
 func TestLoadAndResolveTaskDir(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("DATA", root)
 	configPath := filepath.Join(root, "config.yaml")
 	if err := os.WriteFile(configPath, []byte(`
 bt:
@@ -37,12 +38,18 @@ bt:
 }
 
 func TestMissingOptionalConfigUsesDefaults(t *testing.T) {
-	config, err := Load(filepath.Join(t.TempDir(), "missing.yaml"), false)
+	root := t.TempDir()
+	t.Setenv("DATA", root)
+	config, err := Load(filepath.Join(root, "missing.yaml"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config.BT.ListenPort != DefaultListenPort {
 		t.Fatalf("unexpected listen port %d", config.BT.ListenPort)
+	}
+	wantDownload := filepath.Join(root, "bt", "downloads")
+	if config.BT.DownloadDir != wantDownload {
+		t.Fatalf("download dir %q, want %q", config.BT.DownloadDir, wantDownload)
 	}
 }
 

@@ -7,8 +7,8 @@ services:
     restart: unless-stopped
     init: true
     environment:
+      DATA: /data
       DB_DRIVER: sqlite
-      DB_DSN: /data/home-gateway.db
       SESSION_SECURE: "false"
       # SMB_PASSWORD: ""
       # S3_ACCESS_KEY: ""
@@ -19,8 +19,18 @@ services:
       - "${BT_PORT:-42069}:42069/tcp"
       - "${BT_PORT:-42069}:42069/udp"
     volumes:
-      - app-data:/data
+      - ${CONFIG_DIR:-./config}:/config
+      - ${DATA_DIR:-./data}:/data
+    networks:
+      - default
     stop_grace_period: 30s
 
-volumes:
-  app-data:
+networks:
+  default:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+          gateway: 172.30.0.1
+        - subnet: fd00:c0:ffee:1::/64
+          gateway: fd00:c0:ffee:1::1

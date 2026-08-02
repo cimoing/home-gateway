@@ -1,4 +1,4 @@
-﻿package database
+package database
 
 import (
 	"context"
@@ -15,6 +15,8 @@ import (
 )
 
 func TestConfigFromEnvDefaultsToSQLite(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DATA", root)
 	t.Setenv("DB_DRIVER", "")
 	t.Setenv("DB_DSN", "")
 
@@ -25,8 +27,9 @@ func TestConfigFromEnvDefaultsToSQLite(t *testing.T) {
 	if config.Driver != DriverSQLite {
 		t.Fatalf("expected driver %q, got %q", DriverSQLite, config.Driver)
 	}
-	if config.DSN != defaultSQLiteDSN {
-		t.Fatalf("expected DSN %q, got %q", defaultSQLiteDSN, config.DSN)
+	want := filepath.Join(root, "db", "home-gateway.db")
+	if config.DSN != want {
+		t.Fatalf("expected DSN %q, got %q", want, config.DSN)
 	}
 }
 

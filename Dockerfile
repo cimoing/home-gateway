@@ -28,8 +28,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags="-s -w" \
       -o /out/home-gateway \
       ./cmd/server && \
-    mkdir -p /out/data/downloads && \
-    touch /out/data/.keep
+    mkdir -p /out/config /out/data/db /out/data/bt/downloads /out/data/bt/.staging && \
+    touch /out/data/.keep /out/config/.keep
 
 FROM gcr.io/distroless/static-debian12:nonroot
 
@@ -37,17 +37,19 @@ WORKDIR /app
 
 COPY --from=server-builder --chown=nonroot:nonroot /out/home-gateway ./home-gateway
 COPY --from=web-builder --chown=nonroot:nonroot /src/web/dist ./web
+COPY --from=server-builder --chown=nonroot:nonroot /out/config /config
 COPY --from=server-builder --chown=nonroot:nonroot /out/data /data
+COPY --chown=nonroot:nonroot config.example.yaml /config/config.yaml
 
 ENV GIN_MODE=release \
     SERVER_ADDR=:8080 \
     WEB_ROOT=/app/web \
-    DB_DRIVER=sqlite \
-    DB_DSN=/data/home-gateway.db
+    DATA=/data \
+    DB_DRIVER=sqlite
 
 EXPOSE 8080 42069/tcp 42069/udp
 
-VOLUME ["/data"]
+VOLUME ["/config", "/data"]
 
 STOPSIGNAL SIGTERM
 

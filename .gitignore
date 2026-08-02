@@ -9,10 +9,12 @@ web/node_modules/
 web/dist/
 web/.vite/
 
-# Local configuration
+# Local configuration and runtime data (Docker Compose defaults)
 .env
 .env.*
 !.env.example
+/config/
+/data/
 
 # Local Go module cache used by Docker tooling
 .gomodcache/

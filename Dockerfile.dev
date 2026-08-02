@@ -8,7 +8,7 @@ COPY --from=node /usr/local/ /usr/local/
 
 WORKDIR /workspace
 
-RUN mkdir -p /data/downloads
+RUN mkdir -p /config /data/db /data/bt/downloads /data/bt/.staging
 
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -22,8 +22,8 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY . .
 
 ENV SERVER_ADDR=:8080 \
+    DATA=/data \
     DB_DRIVER=sqlite \
-    DB_DSN=/data/home-gateway.db \
     GOMODCACHE=/opt/go-mod-cache
 
 EXPOSE 8080 5173 42069/tcp 42069/udp

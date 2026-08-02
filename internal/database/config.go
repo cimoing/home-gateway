@@ -3,13 +3,16 @@ package database
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"home-gateway/internal/datadir"
 )
 
 const (
 	DriverSQLite = "sqlite"
 
-	defaultSQLiteDSN = "/data/home-gateway.db"
+	defaultSQLiteDSN = "db/home-gateway.db"
 )
 
 // Config contains database connection settings.
@@ -29,8 +32,12 @@ func ConfigFromEnv() (Config, error) {
 	if dsn == "" {
 		dsn = defaultSQLiteDSN
 	}
+	resolved, err := resolveDSN(dsn)
+	if err != nil {
+		return Config{}, err
+	}
 
-	config := Config{Driver: driver, DSN: dsn}
+	config := Config{Driver: driver, DSN: resolved}
 	if err := config.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -46,4 +53,32 @@ func (c Config) Validate() error {
 		return fmt.Errorf("database DSN must not be empty")
 	}
 	return nil
+}
+
+func resolveDSN(dsn string) (string, error) {
+	dsn = strings.TrimSpace(dsn)
+	if dsn == "" {
+		return "", fmt.Errorf("database DSN must not be empty")
+	}
+	if dsn == ":memory:" || strings.HasPrefix(dsn, "file::memory:") {
+		return dsn, nil
+	}
+	query := ""
+	path := dsn
+	if index := strings.IndexByte(dsn, '?'); index >= 0 {
+		path = dsn[:index]
+		query = dsn[index:]
+	}
+	path = strings.TrimPrefix(path, "file:")
+	if path == "" {
+		return dsn, nil
+	}
+	if filepath.IsAbs(path) {
+		return path + query, nil
+	}
+	resolved, err := datadir.Resolve(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve database DSN: %w", err)
+	}
+	return resolved + query, nil
 }
