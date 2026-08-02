@@ -33,7 +33,7 @@ func (h *Handler) Register(api *gin.RouterGroup) {
 	group.POST("/logout", h.logout)
 }
 
-// RequireSession rejects requests without an active database-backed session.
+// RequireSession rejects requests without an active in-memory session.
 func (h *Handler) RequireSession() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, err := c.Cookie(sessionCookieName)

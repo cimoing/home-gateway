@@ -8,7 +8,6 @@ import (
 
 	"home-gateway/internal/auth"
 	"home-gateway/internal/bt"
-	"home-gateway/internal/credential"
 	"home-gateway/internal/dns"
 	"home-gateway/internal/storage"
 
@@ -16,31 +15,31 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+// Services bundles runtime dependencies for the HTTP router.
+type Services struct {
+	Database *sqlx.DB
+	BT       *bt.Service
+	Storage  *storage.Service
+	DNS      *dns.Service
+	Reload   func() error
+}
+
 // New creates the application's HTTP router.
 func New(databases ...*sqlx.DB) *gin.Engine {
-	return newRouter(os.Getenv("WEB_ROOT"), firstDatabase(databases), nil, nil)
+	return newRouter(os.Getenv("WEB_ROOT"), Services{Database: firstDatabase(databases)})
 }
 
 // NewWithWebRoot creates the router and optionally serves a built web app.
 func NewWithWebRoot(webRoot string, databases ...*sqlx.DB) *gin.Engine {
-	return newRouter(webRoot, firstDatabase(databases), nil, nil)
+	return newRouter(webRoot, Services{Database: firstDatabase(databases)})
 }
 
 // NewWithServices creates the production router with runtime services.
-func NewWithServices(
-	database *sqlx.DB,
-	btService *bt.Service,
-	storageService *storage.Service,
-) *gin.Engine {
-	return newRouter(os.Getenv("WEB_ROOT"), database, btService, storageService)
+func NewWithServices(services Services) *gin.Engine {
+	return newRouter(os.Getenv("WEB_ROOT"), services)
 }
 
-func newRouter(
-	webRoot string,
-	database *sqlx.DB,
-	btService *bt.Service,
-	storageService *storage.Service,
-) *gin.Engine {
+func newRouter(webRoot string, services Services) *gin.Engine {
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery())
 	_ = engine.SetTrustedProxies(nil)
@@ -51,22 +50,31 @@ func newRouter(
 			"status": "ok",
 		})
 	})
-	if database != nil {
-		authHandler := auth.NewHandler(auth.NewService(database))
+	if services.Database != nil {
+		authHandler := auth.NewHandler(auth.NewService(services.Database))
 		authHandler.Register(api)
 		protected := api.Group("")
 		protected.Use(authHandler.RequireSession())
-		encryptor := credential.FromEnv()
-		dns.NewHandler(
-			dns.NewService(database, encryptor),
-		).Register(protected)
-		if storageService == nil {
-			storageService = storage.NewService(database, encryptor)
+		if services.DNS != nil {
+			dns.NewHandler(services.DNS).Register(protected)
 		}
-		storage.NewHandler(storageService).Register(protected)
-		if btService != nil {
-			btService.SetStorage(storageService)
-			bt.NewHandler(btService).Register(protected)
+		if services.Storage != nil {
+			storage.NewHandler(services.Storage).Register(protected)
+		}
+		if services.BT != nil {
+			if services.Storage != nil {
+				services.BT.SetStorage(services.Storage)
+			}
+			bt.NewHandler(services.BT).Register(protected)
+		}
+		if services.Reload != nil {
+			protected.POST("/system/reload-config", func(c *gin.Context) {
+				if err := services.Reload(); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"ok": true})
+			})
 		}
 	}
 

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -36,12 +37,26 @@ type LoginMetadata struct {
 	UserAgent string
 }
 
-// Service authenticates users and manages revocable sessions.
+type sessionEntry struct {
+	userID    int64
+	expiresAt time.Time
+	lastSeen  time.Time
+}
+
+type failedAttempt struct {
+	at time.Time
+}
+
+// Service authenticates users and manages in-memory sessions.
 type Service struct {
 	db              *sqlx.DB
 	sessionDuration time.Duration
 	now             func() time.Time
 	dummyHash       []byte
+
+	mu           sync.Mutex
+	sessions     map[string]sessionEntry
+	failedLogins map[string][]failedAttempt
 }
 
 // NewService creates an authentication service.
@@ -52,6 +67,8 @@ func NewService(db *sqlx.DB) *Service {
 		sessionDuration: defaultSessionDuration,
 		now:             time.Now,
 		dummyHash:       dummyHash,
+		sessions:        make(map[string]sessionEntry),
+		failedLogins:    make(map[string][]failedAttempt),
 	}
 }
 
@@ -66,11 +83,7 @@ func (s *Service) Login(
 	metadata.UserAgent = truncate(metadata.UserAgent, 1024)
 	now := s.now().UTC()
 
-	limited, err := s.isRateLimited(ctx, metadata.IPAddress, now.Add(-loginAttemptWindow))
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	if limited {
+	if s.isRateLimited(metadata.IPAddress, now) {
 		return "", time.Time{}, ErrRateLimited
 	}
 
@@ -93,6 +106,7 @@ func (s *Service) Login(
 		if err == nil {
 			userID = &user.ID
 		}
+		s.recordFailedAttempt(metadata.IPAddress, now)
 		if logErr := s.recordLogin(ctx, userID, username, false, &reason, metadata, now); logErr != nil {
 			return "", time.Time{}, logErr
 		}
@@ -105,32 +119,23 @@ func (s *Service) Login(
 	}
 	expiresAt := now.Add(s.sessionDuration)
 
-	tx, err := s.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("begin login transaction: %w", err)
+	s.mu.Lock()
+	s.sessions[tokenHash] = sessionEntry{
+		userID: user.ID, expiresAt: expiresAt, lastSeen: now,
 	}
-	defer tx.Rollback()
+	s.mu.Unlock()
 
-	insertSession := tx.Rebind(`
-		INSERT INTO user_sessions
-		    (token_hash, user_id, expires_at, created_at, last_seen_at)
-		VALUES (?, ?, ?, ?, ?)
-	`)
-	if _, err := tx.ExecContext(ctx, insertSession, tokenHash, user.ID, expiresAt, now, now); err != nil {
-		return "", time.Time{}, fmt.Errorf("create user session: %w", err)
-	}
-
-	updateUser := tx.Rebind(`
+	updateUser := s.db.Rebind(`
 		UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?
 	`)
-	if _, err := tx.ExecContext(ctx, updateUser, now, now, user.ID); err != nil {
+	if _, err := s.db.ExecContext(ctx, updateUser, now, now, user.ID); err != nil {
+		s.mu.Lock()
+		delete(s.sessions, tokenHash)
+		s.mu.Unlock()
 		return "", time.Time{}, fmt.Errorf("update last login: %w", err)
 	}
-	if err := recordLogin(ctx, tx, &user.ID, username, true, nil, metadata, now); err != nil {
+	if err := s.recordLogin(ctx, &user.ID, username, true, nil, metadata, now); err != nil {
 		return "", time.Time{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", time.Time{}, fmt.Errorf("commit login transaction: %w", err)
 	}
 	return token, expiresAt, nil
 }
@@ -142,37 +147,46 @@ func (s *Service) UserForSession(ctx context.Context, token string) (model.User,
 	}
 
 	now := s.now().UTC()
+	tokenHash := hashToken(token)
+
+	s.mu.Lock()
+	entry, ok := s.sessions[tokenHash]
+	if !ok || !entry.expiresAt.After(now) {
+		delete(s.sessions, tokenHash)
+		s.mu.Unlock()
+		return model.User{}, ErrUnauthenticated
+	}
+	entry.lastSeen = now
+	s.sessions[tokenHash] = entry
+	userID := entry.userID
+	s.mu.Unlock()
+
 	query := s.db.Rebind(`
-		SELECT u.id, u.username, u.password_hash, u.display_name, u.email,
-		       u.enabled, u.created_at, u.updated_at, u.last_login_at
-		FROM user_sessions AS s
-		JOIN users AS u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > ? AND u.enabled = ?
+		SELECT id, username, password_hash, display_name, email,
+		       enabled, created_at, updated_at, last_login_at
+		FROM users WHERE id = ? AND enabled = ?
 	`)
 	var user model.User
-	if err := s.db.GetContext(ctx, &user, query, hashToken(token), now, true); err != nil {
+	if err := s.db.GetContext(ctx, &user, query, userID, true); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			s.mu.Lock()
+			delete(s.sessions, tokenHash)
+			s.mu.Unlock()
 			return model.User{}, ErrUnauthenticated
 		}
-		return model.User{}, fmt.Errorf("find user session: %w", err)
-	}
-
-	update := s.db.Rebind(`UPDATE user_sessions SET last_seen_at = ? WHERE token_hash = ?`)
-	if _, err := s.db.ExecContext(ctx, update, now, hashToken(token)); err != nil {
-		return model.User{}, fmt.Errorf("update user session: %w", err)
+		return model.User{}, fmt.Errorf("find session user: %w", err)
 	}
 	return user, nil
 }
 
 // Logout revokes a session token.
-func (s *Service) Logout(ctx context.Context, token string) error {
+func (s *Service) Logout(_ context.Context, token string) error {
 	if token == "" {
 		return nil
 	}
-	query := s.db.Rebind(`DELETE FROM user_sessions WHERE token_hash = ?`)
-	if _, err := s.db.ExecContext(ctx, query, hashToken(token)); err != nil {
-		return fmt.Errorf("delete user session: %w", err)
-	}
+	s.mu.Lock()
+	delete(s.sessions, hashToken(token))
+	s.mu.Unlock()
 	return nil
 }
 
@@ -189,16 +203,25 @@ func (s *Service) findUser(ctx context.Context, username string) (model.User, er
 	return user, nil
 }
 
-func (s *Service) isRateLimited(ctx context.Context, ipAddress string, since time.Time) (bool, error) {
-	query := s.db.Rebind(`
-		SELECT COUNT(*) FROM user_login_logs
-		WHERE ip_address = ? AND success = ? AND created_at >= ?
-	`)
-	var attempts int
-	if err := s.db.GetContext(ctx, &attempts, query, ipAddress, false, since); err != nil {
-		return false, fmt.Errorf("check login attempts: %w", err)
+func (s *Service) isRateLimited(ipAddress string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	since := now.Add(-loginAttemptWindow)
+	attempts := s.failedLogins[ipAddress]
+	kept := attempts[:0]
+	for _, attempt := range attempts {
+		if attempt.at.After(since) {
+			kept = append(kept, attempt)
+		}
 	}
-	return attempts >= maxLoginAttempts, nil
+	s.failedLogins[ipAddress] = kept
+	return len(kept) >= maxLoginAttempts
+}
+
+func (s *Service) recordFailedAttempt(ipAddress string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failedLogins[ipAddress] = append(s.failedLogins[ipAddress], failedAttempt{at: at})
 }
 
 func (s *Service) recordLogin(
@@ -210,30 +233,12 @@ func (s *Service) recordLogin(
 	metadata LoginMetadata,
 	createdAt time.Time,
 ) error {
-	return recordLogin(ctx, s.db, userID, username, success, failureReason, metadata, createdAt)
-}
-
-type rebindingExecer interface {
-	Rebind(string) string
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-func recordLogin(
-	ctx context.Context,
-	execer rebindingExecer,
-	userID *int64,
-	username string,
-	success bool,
-	failureReason *string,
-	metadata LoginMetadata,
-	createdAt time.Time,
-) error {
-	query := execer.Rebind(`
+	query := s.db.Rebind(`
 		INSERT INTO user_login_logs
 		    (user_id, username, success, failure_reason, ip_address, user_agent, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`)
-	if _, err := execer.ExecContext(
+	if _, err := s.db.ExecContext(
 		ctx,
 		query,
 		userID,

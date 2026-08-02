@@ -23,8 +23,8 @@ type BTTask struct {
 	Name             string     `db:"name" json:"name"`
 	SavePath         string     `db:"save_path" json:"-"`
 	SaveSubdir       string     `db:"-" json:"saveSubdir"`
-	StorageBackendID *int64     `db:"storage_backend_id" json:"storageBackendId,omitempty"`
-	StoragePrefix    string     `db:"storage_prefix" json:"storagePrefix"`
+	StorageBackend string     `db:"storage_backend_name" json:"storageBackend,omitempty"`
+	StoragePrefix  string     `db:"storage_prefix" json:"storagePrefix"`
 	SyncStrategy     string     `db:"sync_strategy" json:"syncStrategy"`
 	SyncStatus       string     `db:"sync_status" json:"syncStatus"`
 	SyncError        string     `db:"sync_error" json:"syncError,omitempty"`

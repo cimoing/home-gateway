@@ -1,35 +1,38 @@
 package dns
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
+	"time"
 
 	"home-gateway/internal/cloudflare"
-	"home-gateway/internal/credential"
-	"home-gateway/internal/database"
+	"home-gateway/internal/config"
 )
 
 type fakeProvider struct {
-	records  []cloudflare.Record
-	listErr  error
-	verified bool
+	zone    cloudflare.Zone
+	records []cloudflare.Record
+	fail    error
 }
 
-func (p *fakeProvider) VerifyToken(context.Context) error {
-	p.verified = true
-	return nil
-}
+func (p *fakeProvider) VerifyToken(context.Context) error { return nil }
 
-func (p *fakeProvider) FindZone(context.Context, string) (cloudflare.Zone, error) {
-	return cloudflare.Zone{ID: "remote-zone", Name: "example.com", Status: "active"}, nil
+func (p *fakeProvider) FindZone(_ context.Context, name string) (cloudflare.Zone, error) {
+	if p.fail != nil {
+		return cloudflare.Zone{}, p.fail
+	}
+	if p.zone.Name == "" {
+		return cloudflare.Zone{}, cloudflare.ErrNotFound
+	}
+	zone := p.zone
+	zone.Name = name
+	return zone, nil
 }
 
 func (p *fakeProvider) ListRecords(context.Context, string) ([]cloudflare.Record, error) {
-	if p.listErr != nil {
-		return nil, p.listErr
+	if p.fail != nil {
+		return nil, p.fail
 	}
 	return append([]cloudflare.Record(nil), p.records...), nil
 }
@@ -40,9 +43,7 @@ func (p *fakeProvider) CreateRecord(
 	input cloudflare.RecordInput,
 ) (cloudflare.Record, error) {
 	record := cloudflare.Record{
-		ID: "created", Type: input.Type, Name: input.Name, Content: input.Content,
-		TTL: input.TTL, Proxied: input.Proxied, Priority: input.Priority,
-		Data: input.Data, Comment: input.Comment,
+		ID: "rec-1", Type: input.Type, Name: input.Name, Content: input.Content, TTL: input.TTL,
 	}
 	p.records = append(p.records, record)
 	return record, nil
@@ -54,88 +55,82 @@ func (p *fakeProvider) UpdateRecord(
 	recordID string,
 	input cloudflare.RecordInput,
 ) (cloudflare.Record, error) {
-	return cloudflare.Record{
-		ID: recordID, Type: input.Type, Name: input.Name, Content: input.Content,
-		TTL: input.TTL, Proxied: input.Proxied, Priority: input.Priority,
-		Data: input.Data, Comment: input.Comment,
-	}, nil
+	record := cloudflare.Record{
+		ID: recordID, Type: input.Type, Name: input.Name, Content: input.Content, TTL: input.TTL,
+	}
+	for index := range p.records {
+		if p.records[index].ID == recordID {
+			p.records[index] = record
+			return record, nil
+		}
+	}
+	return record, nil
 }
 
-func (p *fakeProvider) DeleteRecord(context.Context, string, string) error {
+func (p *fakeProvider) DeleteRecord(_ context.Context, _ string, recordID string) error {
+	next := p.records[:0]
+	for _, record := range p.records {
+		if record.ID == recordID {
+			continue
+		}
+		next = append(next, record)
+	}
+	p.records = next
 	return nil
 }
 
-func TestServiceCredentialZoneAndRemoteAuthoritativeSync(t *testing.T) {
+func TestDNSRemoteCacheAndIncrementalUpdates(t *testing.T) {
+	provider := &fakeProvider{
+		zone: cloudflare.Zone{ID: "zone-1", Name: "example.com", Status: "active"},
+		records: []cloudflare.Record{
+			{ID: "a1", Type: "A", Name: "www.example.com", Content: "1.2.3.4", TTL: 300},
+		},
+	}
+	service := NewService(config.CloudflareConfig{
+		Token: "token",
+		Zones: []string{"example.com"},
+	}, func(string) Provider { return provider })
+
 	ctx := context.Background()
-	db, err := database.Open(ctx, database.Config{
-		Driver: database.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "dns.db"),
+	zones, err := service.ListZones(ctx)
+	if err != nil || len(zones) != 1 || zones[0].ProviderZoneID != "zone-1" {
+		t.Fatalf("list zones: %+v %v", zones, err)
+	}
+	records, err := service.ListRecords(ctx, "example.com")
+	if err != nil || len(records) != 1 {
+		t.Fatalf("list records: %+v %v", records, err)
+	}
+	created, err := service.CreateRecord(ctx, "example.com", cloudflare.RecordInput{
+		Type: "A", Name: "api.example.com", Content: "9.9.9.9", TTL: 120,
 	})
-	if err != nil {
+	if err != nil || created.ID == "" {
+		t.Fatalf("create record: %+v %v", created, err)
+	}
+	records, err = service.ListRecords(ctx, "example.com")
+	if err != nil || len(records) != 2 {
+		t.Fatalf("cached after create: %+v %v", records, err)
+	}
+	if _, err := service.UpdateRecord(ctx, "example.com", created.ID, cloudflare.RecordInput{
+		Type: "A", Name: "api.example.com", Content: "8.8.8.8", TTL: 120,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	if err := database.Migrate(ctx, db, database.DriverSQLite); err != nil {
+	if err := service.DeleteRecord(ctx, "example.com", created.ID); err != nil {
 		t.Fatal(err)
 	}
-
-	encryptor, err := credential.New(bytes.Repeat([]byte{0x33}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	provider := &fakeProvider{records: []cloudflare.Record{
-		{ID: "old", Type: "A", Name: "example.com", Content: "192.0.2.1", TTL: 1},
-	}}
-	service := NewService(db, encryptor, func(string) Provider { return provider })
-
-	stored, err := service.CreateCredential(ctx, "primary", "test-token")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !provider.verified || stored.TokenHint != "oken" || len(stored.TokenCiphertext) != 0 {
-		t.Fatalf("unexpected safe credential: %+v", stored)
+	records, err = service.ListRecords(ctx, "example.com")
+	if err != nil || len(records) != 1 {
+		t.Fatalf("cached after delete: %+v %v", records, err)
 	}
 
-	zone, err := service.CreateZone(ctx, stored.ID, "example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	records, err := service.ListRecords(ctx, zone.ID)
-	if err != nil || len(records) != 1 || records[0].ProviderRecordID != "old" {
-		t.Fatalf("unexpected initial cache %+v: %v", records, err)
-	}
-
-	provider.records = []cloudflare.Record{
-		{ID: "new", Type: "TXT", Name: "example.com", Content: "new", TTL: 120},
-	}
-	records, err = service.SyncZone(ctx, zone.ID)
-	if err != nil || len(records) != 1 || records[0].ProviderRecordID != "new" {
-		t.Fatalf("unexpected synced cache %+v: %v", records, err)
-	}
-
-	provider.listErr = errors.New("temporary remote failure")
-	if _, err := service.SyncZone(ctx, zone.ID); !errors.Is(err, ErrProvider) {
+	provider.fail = errors.New("boom")
+	if _, err := service.RefreshZone(ctx, "example.com"); !errors.Is(err, ErrProvider) {
 		t.Fatalf("expected provider error, got %v", err)
 	}
-	records, err = service.ListRecords(ctx, zone.ID)
-	if err != nil || len(records) != 1 || records[0].ProviderRecordID != "new" {
-		t.Fatalf("failed sync changed cache %+v: %v", records, err)
+	// Failed refresh must keep previous cache.
+	records, err = service.ListRecords(ctx, "example.com")
+	if err != nil || len(records) != 1 {
+		t.Fatalf("cache retained: %+v %v", records, err)
 	}
-}
-
-func TestMissingEncryptionKeyFailsBeforeProviderCall(t *testing.T) {
-	t.Setenv("CREDENTIAL_ENCRYPTION_KEY", "")
-	provider := &fakeProvider{}
-	service := NewService(
-		nil,
-		credential.FromEnv(),
-		func(string) Provider { return provider },
-	)
-	_, err := service.CreateCredential(context.Background(), "primary", "test-token")
-	if !errors.Is(err, ErrNotConfigured) {
-		t.Fatalf("expected configuration error, got %v", err)
-	}
-	if provider.verified {
-		t.Fatal("provider must not receive token without a configured encryption key")
-	}
+	_ = time.Now
 }

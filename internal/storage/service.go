@@ -2,29 +2,21 @@ package storage
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
+	"sync"
 
-	"home-gateway/internal/credential"
+	"home-gateway/internal/config"
 	"home-gateway/internal/model"
-
-	"github.com/jmoiron/sqlx"
 )
 
-const defaultLocalBackendName = "Local Downloads"
-
-// CreateBackendRequest creates or updates a storage backend.
-type CreateBackendRequest struct {
-	Name    string         `json:"name"`
-	Type    string         `json:"type"`
-	Config  map[string]any `json:"config"`
-	Secret  string         `json:"secret"`
-	Enabled *bool          `json:"enabled"`
+// DraftBackendRequest tests a backend that is not yet in config.
+type DraftBackendRequest struct {
+	Name   string         `json:"name"`
+	Type   string         `json:"type"`
+	Config map[string]any `json:"config"`
+	Secret string         `json:"secret"`
 }
 
 // BackendView is a safe API representation.
@@ -33,172 +25,67 @@ type BackendView struct {
 	Config map[string]any `json:"config"`
 }
 
-// Service manages storage backends and file operations.
+// Service manages config-backed storage backends and file operations.
 type Service struct {
-	db        *sqlx.DB
-	encryptor *credential.Encryptor
+	mu       sync.RWMutex
+	backends map[string]config.StorageBackendConfig
 }
 
-func NewService(db *sqlx.DB, encryptor *credential.Encryptor) *Service {
-	return &Service{db: db, encryptor: encryptor}
+// NewService creates a storage service from YAML backends.
+func NewService(backends []config.StorageBackendConfig) *Service {
+	service := &Service{backends: make(map[string]config.StorageBackendConfig)}
+	service.Replace(backends)
+	return service
 }
 
-// EnsureDefaultLocalBackend seeds a local backend from downloadDir when missing.
-func (s *Service) EnsureDefaultLocalBackend(ctx context.Context, downloadDir string) error {
-	downloadDir = filepath.Clean(strings.TrimSpace(downloadDir))
-	if downloadDir == "" {
-		return nil
-	}
-	var count int
-	query := s.db.Rebind(`SELECT COUNT(*) FROM storage_backends WHERE name = ?`)
-	if err := s.db.GetContext(ctx, &count, query, defaultLocalBackendName); err != nil {
-		return fmt.Errorf("check default storage backend: %w", err)
-	}
-	if count > 0 {
-		return nil
-	}
-	enabled := true
-	_, err := s.CreateBackend(ctx, CreateBackendRequest{
-		Name:    defaultLocalBackendName,
-		Type:    model.StorageTypeLocal,
-		Config:  map[string]any{"root": downloadDir},
-		Enabled: &enabled,
-	})
-	return err
-}
-
-func (s *Service) ListBackends(ctx context.Context) ([]BackendView, error) {
-	var items []model.StorageBackend
-	if err := s.db.SelectContext(ctx, &items, `
-		SELECT id, name, type, config_json, secret_ciphertext, secret_nonce,
-		       secret_fingerprint, secret_hint, enabled, created_at, updated_at
-		FROM storage_backends ORDER BY name
-	`); err != nil {
-		return nil, fmt.Errorf("list storage backends: %w", err)
-	}
-	views := make([]BackendView, 0, len(items))
-	for _, item := range items {
-		view, err := s.toView(item)
-		if err != nil {
-			return nil, err
+// Replace atomically reloads backends from configuration.
+func (s *Service) Replace(backends []config.StorageBackendConfig) {
+	next := make(map[string]config.StorageBackendConfig, len(backends))
+	for _, backend := range backends {
+		name := strings.TrimSpace(backend.Name)
+		if name == "" {
+			continue
 		}
-		views = append(views, view)
+		enabled := true
+		if backend.Enabled != nil {
+			enabled = *backend.Enabled
+		}
+		backend.Enabled = &enabled
+		next[name] = backend
+	}
+	s.mu.Lock()
+	s.backends = next
+	s.mu.Unlock()
+}
+
+func (s *Service) ListBackends(_ context.Context) ([]BackendView, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	views := make([]BackendView, 0, len(s.backends))
+	for _, backend := range s.backends {
+		views = append(views, s.toView(backend))
+	}
+	// Stable-ish order by name via simple insertion sort for small N.
+	for i := 1; i < len(views); i++ {
+		j := i
+		for j > 0 && views[j-1].Name > views[j].Name {
+			views[j-1], views[j] = views[j], views[j-1]
+			j--
+		}
 	}
 	return views, nil
 }
 
-func (s *Service) GetBackend(ctx context.Context, id int64) (BackendView, error) {
-	item, err := s.getBackendRow(ctx, id)
+func (s *Service) GetBackend(_ context.Context, name string) (BackendView, error) {
+	backend, err := s.getConfig(name)
 	if err != nil {
 		return BackendView{}, err
 	}
-	return s.toView(item)
+	return s.toView(backend), nil
 }
 
-func (s *Service) CreateBackend(ctx context.Context, request CreateBackendRequest) (BackendView, error) {
-	name, backendType, configJSON, secret, enabled, err := s.normalizeRequest(request, true)
-	if err != nil {
-		return BackendView{}, err
-	}
-	var ciphertext, nonce []byte
-	var fingerprint *string
-	hint := ""
-	if secret != "" {
-		ct, n, fp, h, err := s.encryptor.EncryptFor(credential.StorageSecretAAD, secret)
-		if err != nil {
-			return BackendView{}, err
-		}
-		ciphertext, nonce, hint = ct, n, h
-		fingerprint = &fp
-	}
-	now := time.Now().UTC()
-	query := s.db.Rebind(`
-		INSERT INTO storage_backends
-		    (name, type, config_json, secret_ciphertext, secret_nonce,
-		     secret_fingerprint, secret_hint, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
-	if _, err := s.db.ExecContext(
-		ctx, query, name, backendType, configJSON, nullBytes(ciphertext), nullBytes(nonce),
-		fingerprint, hint, enabled, now, now,
-	); err != nil {
-		if isUniqueViolation(err) {
-			return BackendView{}, ErrConflict
-		}
-		return BackendView{}, fmt.Errorf("create storage backend: %w", err)
-	}
-	return s.getBackendViewByName(ctx, name)
-}
-
-func (s *Service) UpdateBackend(
-	ctx context.Context,
-	id int64,
-	request CreateBackendRequest,
-) (BackendView, error) {
-	existing, err := s.getBackendRow(ctx, id)
-	if err != nil {
-		return BackendView{}, err
-	}
-	if request.Type == "" {
-		request.Type = existing.Type
-	}
-	if request.Type != existing.Type {
-		return BackendView{}, fmt.Errorf("%w: storage type cannot be changed", ErrInvalidInput)
-	}
-	name, _, configJSON, secret, enabled, err := s.normalizeRequest(request, false)
-	if err != nil {
-		return BackendView{}, err
-	}
-	if name == "" {
-		name = existing.Name
-	}
-	ciphertext := existing.SecretCiphertext
-	nonce := existing.SecretNonce
-	fingerprint := existing.SecretFingerprint
-	hint := existing.SecretHint
-	if strings.TrimSpace(request.Secret) != "" {
-		ct, n, fp, h, err := s.encryptor.EncryptFor(credential.StorageSecretAAD, secret)
-		if err != nil {
-			return BackendView{}, err
-		}
-		ciphertext, nonce, hint = ct, n, h
-		fingerprint = &fp
-	}
-	if request.Enabled == nil {
-		enabled = existing.Enabled
-	}
-	query := s.db.Rebind(`
-		UPDATE storage_backends SET name = ?, config_json = ?, secret_ciphertext = ?,
-		    secret_nonce = ?, secret_fingerprint = ?, secret_hint = ?, enabled = ?,
-		    updated_at = ? WHERE id = ?
-	`)
-	if _, err := s.db.ExecContext(
-		ctx, query, name, configJSON, nullBytes(ciphertext), nullBytes(nonce),
-		fingerprint, hint, enabled, time.Now().UTC(), id,
-	); err != nil {
-		if isUniqueViolation(err) {
-			return BackendView{}, ErrConflict
-		}
-		return BackendView{}, fmt.Errorf("update storage backend: %w", err)
-	}
-	return s.GetBackend(ctx, id)
-}
-
-func (s *Service) DeleteBackend(ctx context.Context, id int64) error {
-	query := s.db.Rebind(`DELETE FROM storage_backends WHERE id = ?`)
-	result, err := s.db.ExecContext(ctx, query, id)
-	if err != nil {
-		return fmt.Errorf("delete storage backend: %w", err)
-	}
-	affected, _ := result.RowsAffected()
-	if affected == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-func (s *Service) TestBackend(ctx context.Context, id int64) error {
-	backend, err := s.open(ctx, id)
+func (s *Service) TestBackend(ctx context.Context, name string) error {
+	backend, err := s.open(name)
 	if err != nil {
 		return err
 	}
@@ -206,13 +93,13 @@ func (s *Service) TestBackend(ctx context.Context, id int64) error {
 	return backend.Ping(ctx)
 }
 
-func (s *Service) TestDraft(ctx context.Context, request CreateBackendRequest) error {
-	_, backendType, configJSON, secret, _, err := s.normalizeRequest(request, true)
-	if err != nil {
-		return err
+func (s *Service) TestDraft(ctx context.Context, request DraftBackendRequest) error {
+	enabled := true
+	cfg := config.StorageBackendConfig{
+		Name: request.Name, Type: request.Type, Config: request.Config,
+		Secret: request.Secret, Enabled: &enabled,
 	}
-	row := model.StorageBackend{Type: backendType, ConfigJSON: configJSON}
-	backend, err := OpenBackend(row, secret)
+	backend, err := OpenFromConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -220,8 +107,8 @@ func (s *Service) TestDraft(ctx context.Context, request CreateBackendRequest) e
 	return backend.Ping(ctx)
 }
 
-func (s *Service) ListEntries(ctx context.Context, id int64, dir string) ([]Entry, error) {
-	backend, err := s.open(ctx, id)
+func (s *Service) ListEntries(ctx context.Context, name string, dir string) ([]Entry, error) {
+	backend, err := s.open(name)
 	if err != nil {
 		return nil, err
 	}
@@ -229,8 +116,8 @@ func (s *Service) ListEntries(ctx context.Context, id int64, dir string) ([]Entr
 	return backend.List(ctx, dir)
 }
 
-func (s *Service) Mkdir(ctx context.Context, id int64, dir string) error {
-	backend, err := s.open(ctx, id)
+func (s *Service) Mkdir(ctx context.Context, name string, dir string) error {
+	backend, err := s.open(name)
 	if err != nil {
 		return err
 	}
@@ -238,8 +125,8 @@ func (s *Service) Mkdir(ctx context.Context, id int64, dir string) error {
 	return backend.Mkdir(ctx, dir)
 }
 
-func (s *Service) Remove(ctx context.Context, id int64, target string, recursive bool) error {
-	backend, err := s.open(ctx, id)
+func (s *Service) Remove(ctx context.Context, name string, target string, recursive bool) error {
+	backend, err := s.open(name)
 	if err != nil {
 		return err
 	}
@@ -247,8 +134,8 @@ func (s *Service) Remove(ctx context.Context, id int64, target string, recursive
 	return backend.Remove(ctx, target, recursive)
 }
 
-func (s *Service) Rename(ctx context.Context, id int64, from string, to string) error {
-	backend, err := s.open(ctx, id)
+func (s *Service) Rename(ctx context.Context, name string, from string, to string) error {
+	backend, err := s.open(name)
 	if err != nil {
 		return err
 	}
@@ -256,44 +143,43 @@ func (s *Service) Rename(ctx context.Context, id int64, from string, to string) 
 	return backend.Rename(ctx, from, to)
 }
 
-func (s *Service) OpenFile(ctx context.Context, id int64, filePath string) (Backend, string, error) {
-	backend, err := s.open(ctx, id)
+func (s *Service) OpenFile(_ context.Context, name string, filePath string) (Backend, string, error) {
+	backend, err := s.open(name)
 	if err != nil {
 		return nil, "", err
 	}
 	return backend, filePath, nil
 }
 
-func (s *Service) CreateFile(ctx context.Context, id int64, filePath string) (Backend, error) {
-	return s.open(ctx, id)
+func (s *Service) CreateFile(_ context.Context, name string, _ string) (Backend, error) {
+	return s.open(name)
 }
 
 // ResolveForBT returns save path and sync metadata for a BT task destination.
 func (s *Service) ResolveForBT(
-	ctx context.Context,
-	backendID int64,
+	_ context.Context,
+	backendName string,
 	prefix string,
 	stagingRoot string,
 	taskKey string,
 ) (savePath string, syncStatus string, backendType string, err error) {
-	row, err := s.getBackendRow(ctx, backendID)
+	row, err := s.getConfig(backendName)
 	if err != nil {
 		return "", "", "", err
 	}
-	if !row.Enabled {
+	if row.Enabled != nil && !*row.Enabled {
 		return "", "", "", fmt.Errorf("%w: storage backend is disabled", ErrUnavailable)
 	}
 	cleanedPrefix, err := cleanRelativePath(prefix)
 	if err != nil {
 		return "", "", "", fmt.Errorf("%w: invalid storage prefix", ErrInvalidInput)
 	}
-	switch row.Type {
+	switch strings.ToLower(row.Type) {
 	case model.StorageTypeLocal:
-		var cfg LocalConfig
-		if err := json.Unmarshal([]byte(row.ConfigJSON), &cfg); err != nil {
+		root := filepath.Clean(stringConfig(row.Config, "root"))
+		if root == "" || !filepath.IsAbs(root) {
 			return "", "", "", fmt.Errorf("%w: invalid local config", ErrInvalidInput)
 		}
-		root := filepath.Clean(cfg.Root)
 		savePath = root
 		if cleanedPrefix != "" {
 			savePath = filepath.Join(root, filepath.FromSlash(cleanedPrefix))
@@ -306,7 +192,7 @@ func (s *Service) ResolveForBT(
 		savePath = filepath.Join(
 			filepath.Clean(stagingRoot),
 			".storage",
-			fmt.Sprintf("%d", backendID),
+			sanitizeName(backendName),
 			taskKey,
 		)
 		return savePath, model.BTSyncPending, row.Type, nil
@@ -315,176 +201,50 @@ func (s *Service) ResolveForBT(
 	}
 }
 
-// OpenByID opens a backend for sync/file operations by ID.
-func (s *Service) OpenByID(ctx context.Context, id int64) (Backend, error) {
-	return s.open(ctx, id)
+// OpenByName opens a backend for sync/file operations by name.
+func (s *Service) OpenByName(_ context.Context, name string) (Backend, error) {
+	return s.open(name)
 }
 
-func (s *Service) open(ctx context.Context, id int64) (Backend, error) {
-	row, err := s.getBackendRow(ctx, id)
+func (s *Service) open(name string) (Backend, error) {
+	row, err := s.getConfig(name)
 	if err != nil {
 		return nil, err
 	}
-	if !row.Enabled {
+	if row.Enabled != nil && !*row.Enabled {
 		return nil, fmt.Errorf("%w: storage backend is disabled", ErrUnavailable)
 	}
-	secret := ""
-	if len(row.SecretCiphertext) > 0 {
-		secret, err = s.encryptor.DecryptFor(
-			credential.StorageSecretAAD, row.SecretCiphertext, row.SecretNonce,
-		)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return OpenBackend(row, secret)
+	return OpenFromConfig(row)
 }
 
-func (s *Service) getBackendRow(ctx context.Context, id int64) (model.StorageBackend, error) {
-	var item model.StorageBackend
-	query := s.db.Rebind(`
-		SELECT id, name, type, config_json, secret_ciphertext, secret_nonce,
-		       secret_fingerprint, secret_hint, enabled, created_at, updated_at
-		FROM storage_backends WHERE id = ?
-	`)
-	if err := s.db.GetContext(ctx, &item, query, id); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return model.StorageBackend{}, ErrNotFound
-		}
-		return model.StorageBackend{}, err
+func (s *Service) getConfig(name string) (config.StorageBackendConfig, error) {
+	name = strings.TrimSpace(name)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.backends[name]
+	if !ok {
+		return config.StorageBackendConfig{}, ErrNotFound
 	}
 	return item, nil
 }
 
-func (s *Service) getBackendViewByName(ctx context.Context, name string) (BackendView, error) {
-	var item model.StorageBackend
-	query := s.db.Rebind(`
-		SELECT id, name, type, config_json, secret_ciphertext, secret_nonce,
-		       secret_fingerprint, secret_hint, enabled, created_at, updated_at
-		FROM storage_backends WHERE name = ?
-	`)
-	if err := s.db.GetContext(ctx, &item, query, name); err != nil {
-		return BackendView{}, err
+func (s *Service) toView(backend config.StorageBackendConfig) BackendView {
+	enabled := true
+	if backend.Enabled != nil {
+		enabled = *backend.Enabled
 	}
-	return s.toView(item)
-}
-
-func (s *Service) toView(item model.StorageBackend) (BackendView, error) {
-	item.HasSecret = len(item.SecretCiphertext) > 0
-	item.SecretCiphertext = nil
-	item.SecretNonce = nil
-	item.SecretFingerprint = nil
-	cfg, err := PublicConfig(item)
-	if err != nil {
-		return BackendView{}, err
-	}
-	return BackendView{StorageBackend: item, Config: cfg}, nil
-}
-
-func (s *Service) normalizeRequest(
-	request CreateBackendRequest,
-	requireSecretForRemote bool,
-) (name string, backendType string, configJSON string, secret string, enabled bool, err error) {
-	name = strings.TrimSpace(request.Name)
-	backendType = strings.TrimSpace(strings.ToLower(request.Type))
-	secret = request.Secret
-	enabled = true
-	if request.Enabled != nil {
-		enabled = *request.Enabled
-	}
-	if name == "" || len(name) > 128 {
-		return "", "", "", "", false, fmt.Errorf("%w: name must contain 1 to 128 characters", ErrInvalidInput)
-	}
-	switch backendType {
-	case model.StorageTypeLocal:
-		root, _ := request.Config["root"].(string)
-		root = filepath.Clean(strings.TrimSpace(root))
-		if root == "" || !filepath.IsAbs(root) {
-			return "", "", "", "", false, fmt.Errorf("%w: local root must be an absolute path", ErrInvalidInput)
-		}
-		payload, _ := json.Marshal(LocalConfig{Root: root})
-		configJSON = string(payload)
-		secret = ""
-	case model.StorageTypeSMB:
-		cfg := SMBConfigJSON{
-			Host:     stringConfig(request.Config, "host"),
-			Share:    stringConfig(request.Config, "share"),
-			Username: stringConfig(request.Config, "username"),
-			Domain:   stringConfig(request.Config, "domain"),
-			Port:     intConfig(request.Config, "port", 445),
-		}
-		if cfg.Host == "" || cfg.Share == "" || cfg.Username == "" {
-			return "", "", "", "", false, fmt.Errorf("%w: smb host, share, and username are required", ErrInvalidInput)
-		}
-		if requireSecretForRemote && strings.TrimSpace(secret) == "" {
-			return "", "", "", "", false, fmt.Errorf("%w: smb password is required", ErrInvalidInput)
-		}
-		payload, _ := json.Marshal(cfg)
-		configJSON = string(payload)
-	case model.StorageTypeS3:
-		cfg := S3ConfigJSON{
-			Endpoint:       stringConfig(request.Config, "endpoint"),
-			Region:         stringConfig(request.Config, "region"),
-			Bucket:         stringConfig(request.Config, "bucket"),
-			Prefix:         stringConfig(request.Config, "prefix"),
-			AccessKeyID:    stringConfig(request.Config, "accessKeyId"),
-			ForcePathStyle: boolConfig(request.Config, "forcePathStyle"),
-		}
-		if cfg.Bucket == "" || cfg.AccessKeyID == "" {
-			return "", "", "", "", false, fmt.Errorf("%w: s3 bucket and accessKeyId are required", ErrInvalidInput)
-		}
-		if requireSecretForRemote && strings.TrimSpace(secret) == "" {
-			return "", "", "", "", false, fmt.Errorf("%w: s3 secret is required", ErrInvalidInput)
-		}
-		payload, _ := json.Marshal(cfg)
-		configJSON = string(payload)
-	default:
-		return "", "", "", "", false, fmt.Errorf("%w: type must be local, smb, or s3", ErrInvalidInput)
-	}
-	return name, backendType, configJSON, secret, enabled, nil
-}
-
-func stringConfig(config map[string]any, key string) string {
-	if config == nil {
-		return ""
-	}
-	value, _ := config[key].(string)
-	return strings.TrimSpace(value)
-}
-
-func intConfig(config map[string]any, key string, fallback int) int {
-	if config == nil {
-		return fallback
-	}
-	switch value := config[key].(type) {
-	case float64:
-		return int(value)
-	case int:
-		return value
-	case json.Number:
-		n, _ := value.Int64()
-		return int(n)
-	default:
-		return fallback
+	return BackendView{
+		StorageBackend: model.StorageBackend{
+			Name: backend.Name, Type: backend.Type,
+			HasSecret: strings.TrimSpace(backend.Secret) != "",
+			Enabled: enabled,
+		},
+		Config: PublicConfig(backend),
 	}
 }
 
-func boolConfig(config map[string]any, key string) bool {
-	if config == nil {
-		return false
-	}
-	value, _ := config[key].(bool)
-	return value
-}
-
-func nullBytes(value []byte) any {
-	if len(value) == 0 {
-		return nil
-	}
-	return value
-}
-
-func isUniqueViolation(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "unique") || strings.Contains(message, "duplicate")
+func sanitizeName(name string) string {
+	name = strings.TrimSpace(name)
+	replacer := strings.NewReplacer("/", "_", "\\", "_", "..", "_", " ", "_")
+	return replacer.Replace(name)
 }

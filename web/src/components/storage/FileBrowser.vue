@@ -5,7 +5,7 @@ import type { StorageBackend, StorageEntry } from './types'
 import { formatBytes } from './types'
 
 const props = defineProps<{ backends: StorageBackend[] }>()
-const backendId = ref<number | null>(null)
+const backendName = ref('')
 const path = ref('')
 const entries = ref<StorageEntry[]>([])
 const busy = ref(false)
@@ -21,24 +21,24 @@ const crumbs = computed(() => {
 watch(
   () => props.backends,
   (items) => {
-    if (!backendId.value && items.length) backendId.value = items[0].id
+    if (!backendName.value && items.length) backendName.value = items[0].name
   },
   { immediate: true },
 )
 
-watch([backendId, path], () => {
-  if (backendId.value) void loadEntries()
+watch([backendName, path], () => {
+  if (backendName.value) void loadEntries()
 })
 
 async function loadEntries() {
-  if (!backendId.value) return
+  if (!backendName.value) return
   busy.value = true
   error.value = ''
   try {
     const query = new URLSearchParams()
     if (path.value) query.set('path', path.value)
     const data = await api<{ entries: StorageEntry[] }>(
-      `/api/storage/backends/${backendId.value}/entries?${query}`,
+      `/api/storage/backends/${encodeURIComponent(backendName.value)}/entries?${query}`,
     )
     entries.value = data.entries || []
   } catch (reason) {
@@ -57,10 +57,10 @@ function goCrumb(index: number) {
 }
 
 async function mkdir() {
-  if (!backendId.value || !newDir.value.trim()) return
+  if (!backendName.value || !newDir.value.trim()) return
   const target = path.value ? `${path.value}/${newDir.value.trim()}` : newDir.value.trim()
   await run(async () => {
-    await api(`/api/storage/backends/${backendId.value}/mkdir`, {
+    await api(`/api/storage/backends/${encodeURIComponent(backendName.value)}/mkdir`, {
       method: 'POST',
       body: JSON.stringify({ path: target }),
     })
@@ -70,18 +70,21 @@ async function mkdir() {
 }
 
 async function removeEntry(entry: StorageEntry) {
-  if (!backendId.value) return
+  if (!backendName.value) return
   if (!confirm(`确定删除“${entry.name}”？`)) return
   const recursive = entry.isDir ? confirm('目录非空时是否递归删除？') : false
   await run(async () => {
     const query = new URLSearchParams({ path: entry.path, recursive: String(recursive) })
-    await api(`/api/storage/backends/${backendId.value}/entries?${query}`, { method: 'DELETE' })
+    await api(
+      `/api/storage/backends/${encodeURIComponent(backendName.value)}/entries?${query}`,
+      { method: 'DELETE' },
+    )
     await loadEntries()
   }, '已删除。')
 }
 
 async function upload(event: Event) {
-  if (!backendId.value) return
+  if (!backendName.value) return
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
@@ -90,16 +93,22 @@ async function upload(event: Event) {
     const body = new FormData()
     body.set('file', file)
     body.set('path', target)
-    await api(`/api/storage/backends/${backendId.value}/upload`, { method: 'POST', body })
+    await api(`/api/storage/backends/${encodeURIComponent(backendName.value)}/upload`, {
+      method: 'POST',
+      body,
+    })
     input.value = ''
     await loadEntries()
   }, '上传完成。')
 }
 
 function download(entry: StorageEntry) {
-  if (!backendId.value || entry.isDir) return
+  if (!backendName.value || entry.isDir) return
   const query = new URLSearchParams({ path: entry.path })
-  window.open(`/api/storage/backends/${backendId.value}/download?${query}`, '_blank')
+  window.open(
+    `/api/storage/backends/${encodeURIComponent(backendName.value)}/download?${query}`,
+    '_blank',
+  )
 }
 
 async function run(action: () => Promise<void>, success = '') {
@@ -124,18 +133,18 @@ async function run(action: () => Promise<void>, success = '') {
       <p>在已配置的存储后端上浏览、上传与删除文件。</p>
     </div>
     <div class="bt-toolbar">
-      <select v-model.number="backendId">
-        <option v-for="backend in backends" :key="backend.id" :value="backend.id">
+      <select v-model="backendName">
+        <option v-for="backend in backends" :key="backend.name" :value="backend.name">
           {{ backend.name }} ({{ backend.type }})
         </option>
       </select>
       <input v-model="newDir" placeholder="新建目录名" />
-      <button class="secondary-button small-button" :disabled="busy || !backendId" @click="mkdir">
+      <button class="secondary-button small-button" :disabled="busy || !backendName" @click="mkdir">
         新建目录
       </button>
       <label class="small-button secondary-button upload-label">
         上传
-        <input type="file" hidden :disabled="busy || !backendId" @change="upload" />
+        <input type="file" hidden :disabled="busy || !backendName" @change="upload" />
       </label>
       <button class="secondary-button small-button" :disabled="busy" @click="loadEntries">刷新</button>
     </div>
@@ -148,7 +157,7 @@ async function run(action: () => Promise<void>, success = '') {
     </nav>
     <p v-if="error" class="notice error-message">{{ error }}</p>
     <p v-if="message" class="notice success-message">{{ message }}</p>
-    <p v-if="!backends.length" class="empty-state">请先添加存储后端。</p>
+    <p v-if="!backends.length" class="empty-state">请先在配置文件中声明存储后端。</p>
     <div v-else class="record-table-wrap">
       <table>
         <thead>

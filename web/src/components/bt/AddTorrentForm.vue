@@ -14,13 +14,13 @@ const backends = ref<StorageBackend[]>([])
 const form = reactive({
   uri: '',
   subdirectory: '',
-  storageBackendId: 0,
+  storageBackend: '',
   syncStrategy: 'complete',
   start: true,
 })
 
 const selectedBackend = computed(() =>
-  backends.value.find((item) => item.id === form.storageBackendId),
+  backends.value.find((item) => item.name === form.storageBackend),
 )
 const needsSync = computed(
   () => !!selectedBackend.value && selectedBackend.value.type !== 'local',
@@ -39,7 +39,7 @@ onMounted(async () => {
     const data = await api<{ backends: StorageBackend[] }>('/api/storage/backends')
     backends.value = (data.backends || []).filter((item) => item.enabled)
     const local = backends.value.find((item) => item.type === 'local')
-    form.storageBackendId = local?.id || backends.value[0]?.id || 0
+    form.storageBackend = local?.name || backends.value[0]?.name || ''
   } catch {
     // Storage module may be unavailable during early boot; keep form usable.
   }
@@ -57,7 +57,7 @@ async function submit() {
     const payload = {
       uri: form.uri,
       subdirectory: form.subdirectory,
-      storageBackendId: form.storageBackendId,
+      storageBackend: form.storageBackend,
       syncStrategy: needsSync.value ? form.syncStrategy : '',
       start: form.start,
     }
@@ -72,7 +72,7 @@ async function submit() {
       const body = new FormData()
       body.set('torrent', file.value)
       body.set('subdirectory', form.subdirectory)
-      body.set('storageBackendId', String(form.storageBackendId || 0))
+      if (form.storageBackend) body.set('storageBackend', form.storageBackend)
       if (needsSync.value) body.set('syncStrategy', form.syncStrategy)
       body.set('start', String(form.start))
       result = await api('/api/bt/tasks/torrent', { method: 'POST', body })
@@ -111,13 +111,13 @@ async function submit() {
     </label>
     <label>
       存储后端
-      <select v-model.number="form.storageBackendId">
-        <option :value="0">默认下载目录</option>
-        <option v-for="backend in backends" :key="backend.id" :value="backend.id">
+      <select v-model="form.storageBackend">
+        <option value="">默认下载目录</option>
+        <option v-for="backend in backends" :key="backend.name" :value="backend.name">
           {{ backend.name }} ({{ backend.type }})
         </option>
       </select>
-      <small>本地后端直写目标路径；Samba/S3 先下载到本地缓存，再按策略同步。</small>
+      <small>名称来自配置文件；本地直写，远程先缓存再按策略同步。</small>
     </label>
     <label v-if="needsSync">
       同步策略

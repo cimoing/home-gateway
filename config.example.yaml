@@ -11,3 +11,36 @@ bt:
   sync_strategy: complete
   # max concurrent uploads while syncing to remote storage
   sync_concurrency: 2
+
+storage:
+  backends:
+    - name: local
+      type: local
+      config:
+        root: /data/downloads
+    # - name: nas
+    #   type: smb
+    #   config:
+    #     host: 192.168.1.10
+    #     share: media
+    #     username: gateway
+    #     domain: ""
+    #     port: 445
+    #   secret: ${SMB_PASSWORD}
+    # - name: archive
+    #   type: s3
+    #   config:
+    #     endpoint: https://s3.example.com
+    #     region: auto
+    #     bucket: archive
+    #     prefix: ""
+    #     access_key_id: ${S3_ACCESS_KEY}
+    #     force_path_style: true
+    #   secret: ${S3_SECRET_KEY}
+
+dns:
+  cloudflare:
+    # token: ${CF_API_TOKEN}
+    zones: []
+    # zones:
+    #   - example.com

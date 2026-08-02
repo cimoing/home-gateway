@@ -6,10 +6,11 @@
 
 ```text
 cmd/server/       Go 服务入口
-internal/database/ SQLx 连接与数据库迁移
+internal/config/  YAML 配置（BT / 存储 / DNS 连接）
+internal/database/ SQLite（用户与 BT 状态）迁移
 internal/cloudflare/ Cloudflare v4 HTTP 客户端
-internal/credential/ API Token 加密
-internal/dns/      DNS 管理服务与 API
+internal/dns/      DNS 管理（远程 + 内存缓存）
+internal/storage/  配置驱动的存储后端
 internal/model/    数据模型
 internal/router/  Gin 路由
 web/              Vue 前端
@@ -40,30 +41,25 @@ docker run --rm -it `
 
 ## Docker Compose 本地运行
 
-`compose.yml` 会构建生产镜像，并启动 Home Gateway 与 PostgreSQL 18。首次运行先复制
-环境变量模板，并替换数据库密码及凭据加密主密钥：
+`compose.yml` 构建生产镜像并以嵌入式 SQLite 运行。首次可复制环境变量模板，并按需
+设置 `config.yaml` 中 `${VAR}` 引用的密钥（如 `CF_API_TOKEN`、`SMB_PASSWORD`）：
 
 ```powershell
 Copy-Item .env.example .env
-```
-
-`CREDENTIAL_ENCRYPTION_KEY` 必须是 Base64 编码的 32 字节随机值。配置完成后启动：
-
-```powershell
+Copy-Item config.example.yaml config.yaml
 docker compose up -d --build
 docker compose ps
 ```
 
-Web 地址为 `http://localhost:8080`，PostgreSQL 默认映射到本机 `5432`，BT 使用
-`42069/tcp` 和 `42069/udp`。数据库与下载数据分别保存在
-`postgres-data`、`app-data` 命名卷中。查看日志和停止服务：
+Web 地址为 `http://localhost:8080`，BT 使用 `42069/tcp` 与 `42069/udp`。SQLite、
+配置与下载数据保存在 `app-data` 命名卷中。查看日志和停止服务：
 
 ```powershell
 docker compose logs -f app
 docker compose down
 ```
 
-`docker compose down` 会保留数据卷；只有明确需要清空全部数据库和下载数据时才使用
+`docker compose down` 会保留数据卷；只有明确需要清空全部数据时才使用
 `docker compose down -v`。
 
 ## 测试
@@ -72,8 +68,7 @@ docker compose down
 docker build -f Dockerfile.dev --target test -t home-gateway:test .
 ```
 
-该阶段使用 SQLite 执行全部 Go 测试及 Vue 生产构建。完整验证 SQLite、PostgreSQL
-和 MySQL：
+该阶段使用 SQLite 执行全部 Go 测试及 Vue 生产构建：
 
 ```powershell
 docker compose -f compose.test.yml up --build `
@@ -82,34 +77,16 @@ docker compose -f compose.test.yml up --build `
 docker compose -f compose.test.yml down -v
 ```
 
-任一数据库迁移、约束测试或前端构建失败都会返回非零状态。
+任一迁移、约束测试或前端构建失败都会返回非零状态。
 
 ## 数据库
 
-应用使用以下环境变量：
+应用仅支持嵌入式 SQLite，相关环境变量：
 
-- `DB_DRIVER`：`sqlite`、`pgsql`/`postgres` 或 `mysql`，默认为 `sqlite`
-- `DB_DSN`：数据库连接字符串；SQLite 默认值为 `/data/home-gateway.db`
+- `DB_DRIVER`：仅允许 `sqlite`（默认）
+- `DB_DSN`：SQLite 文件路径，默认 `/data/home-gateway.db`
 
-PostgreSQL 示例：
-
-```powershell
-docker run --rm -p 8080:8080 `
-  -e DB_DRIVER=pgsql `
-  -e "DB_DSN=postgres://gateway:password@database:5432/gateway?sslmode=disable" `
-  home-gateway:latest
-```
-
-MySQL 示例：
-
-```powershell
-docker run --rm -p 8080:8080 `
-  -e DB_DRIVER=mysql `
-  -e "DB_DSN=gateway:password@tcp(database:3306)/gateway?parseTime=true" `
-  home-gateway:latest
-```
-
-服务启动时会自动执行当前数据库方言对应的嵌入式迁移。
+服务启动时会自动执行嵌入式 SQLite 迁移。用户密码与 BT 任务状态保存在该库中。
 
 ## 命令行
 
@@ -152,51 +129,37 @@ docker run --rm -it `
 - `GET /api/auth/session`：读取当前登录用户
 - `POST /api/auth/logout`：撤销当前会话
 
-会话令牌为随机值，数据库仅保存 SHA-256 哈希，浏览器通过 `HttpOnly`、
-`SameSite=Lax` Cookie 持有令牌。会话默认有效期为 24 小时；连续失败登录会触发
-短期限流。HTTPS 部署时应设置 `SESSION_SECURE=true`。
+会话令牌为随机值，保存在**进程内存**中（重启后需重新登录）；浏览器通过
+`HttpOnly`、`SameSite=Lax` Cookie 持有令牌。会话默认有效期为 24 小时；连续失败
+登录会触发短期限流。HTTPS 部署时应设置 `SESSION_SECURE=true`。
+
+## 配置文件
+
+默认读取 `/data/config.yaml`（见 `config.example.yaml`）：
+
+- `bt.*`：下载引擎参数（部分可在 Web 设置页写回）
+- `storage.backends[]`：按**名称**定义 local / smb / s3；密钥用 `${ENV}`
+- `dns.cloudflare.token` / `zones`：Cloudflare 连接与托管域名列表
+
+修改连接类配置后，可调用 `POST /api/system/reload-config`（需登录）热加载，无需
+重启进程。存储后端不在 Web UI 中增删改。
 
 ## Cloudflare DNS 管理
 
-登录后可在 Web 界面管理 API Token、绑定域名以及维护 A、AAAA、CNAME、TXT、
-MX、CAA 和 SRV 记录。记录查询默认读取本地缓存；创建、修改和删除会先写入
-Cloudflare，再更新缓存。“同步”操作会拉取全部远程分页并在单个数据库事务中
-更新缓存，Cloudflare 始终是权威数据源。
+Token 与 Zone 列表来自 YAML。Web 界面可查看域名、维护 A/AAAA/CNAME/TXT/MX/CAA/SRV
+记录。列表优先使用进程内缓存；编辑会先写 Cloudflare 再增量更新缓存；“刷新”
+会全量拉取远程记录。Cloudflare 始终是权威数据源。
 
-创建 API Token 时应只授予目标 Zone 的以下最小权限：
+API Token 建议最小权限：
 
 - `Zone / Zone / Read`
 - `Zone / DNS / Edit`
 
-Token 使用 AES-256-GCM 加密。运行服务前必须通过
-`CREDENTIAL_ENCRYPTION_KEY` 提供 Base64 编码的 32 字节主密钥；没有配置时服务
-仍可启动和登录，但凭据写入及 Cloudflare 操作会返回 503。PowerShell 生成示例：
-
-```powershell
-$bytes = New-Object byte[] 32
-$rng = New-Object Security.Cryptography.RNGCryptoServiceProvider
-$rng.GetBytes($bytes)
-$key = [Convert]::ToBase64String($bytes)
-$key
-```
-
-启动时传入密钥：
-
-```powershell
-docker run --rm -p 8080:8080 `
-  -e "CREDENTIAL_ENCRYPTION_KEY=$key" `
-  -v home-gateway-data:/data `
-  home-gateway:latest run
-```
-
-密钥不会写入数据库。必须将该密钥与 `/data` 数据卷分别安全备份；丢失或替换
-密钥后，已有 API Token 无法解密。不要将密钥提交到 Git 或写入镜像。
-
 受登录保护的 API 位于 `/api/dns`：
 
-- `/credentials`：列出、添加、更新和删除加密凭据
-- `/zones`：列出、绑定和移除域名，`POST /zones/:id/sync` 手动同步
-- `/zones/:id/records`：读取缓存以及远程记录增删改查
+- `GET /zones`：列出配置中的域名
+- `POST /zones/:zoneName/sync`：手动全量刷新记录
+- `/zones/:zoneName/records`：读取缓存以及远程记录增删改查
 
 ## BT 下载管理
 
@@ -204,15 +167,9 @@ docker run --rm -p 8080:8080 `
 进度、暂停/恢复、文件选择及优先级、删除任务以及可选删除下载数据。任务状态和
 文件选择保存在数据库中，服务重启后会自动恢复并续传。Web 管理接口均要求登录。
 
-默认读取 `/data/config.yaml`；文件不存在时下载目录为 `/data/downloads`，
-TCP/UDP 监听端口为 `42069`。可复制 `config.example.yaml`：
-
-```yaml
-bt:
-  enabled: true
-  download_dir: /data/downloads
-  listen_port: 42069
-```
+BT 任务状态、文件选择与同步进度保存在 SQLite；下载内容在磁盘上。添加任务时可
+选择配置中的存储后端名称；远程后端先写入本地 staging，再按 `complete` /
+`per_file` 策略同步。
 
 使用自定义配置文件：
 
@@ -225,9 +182,7 @@ docker run --rm -p 8080:8080 `
   home-gateway:latest run --config /data/config.yaml
 ```
 
-Web 添加任务时可指定下载根目录内的相对子目录，只影响该新任务，不修改 YAML
-或已有任务。绝对路径和 `..` 目录穿越会被拒绝。删除任务时可选择保留文件或同时
-删除；数据删除仅针对数据库中记录且位于配置根目录内的种子文件。
+Web 添加任务时可指定相对子目录与存储后端名称。绝对路径和 `..` 目录穿越会被拒绝。
 
 BT API 位于 `/api/bt`：
 
@@ -247,7 +202,6 @@ docker build -t home-gateway:latest .
 docker run --rm -p 8080:8080 `
   -p 42069:42069/tcp `
   -p 42069:42069/udp `
-  -e "CREDENTIAL_ENCRYPTION_KEY=$key" `
   -v home-gateway-data:/data `
   home-gateway:latest run
 ```

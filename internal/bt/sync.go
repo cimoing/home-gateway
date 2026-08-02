@@ -21,7 +21,7 @@ func (s *Service) SyncTask(ctx context.Context, id int64) (model.BTTask, error) 
 	if err != nil {
 		return model.BTTask{}, err
 	}
-	if task.StorageBackendID == nil || task.SyncStatus == model.BTSyncNone {
+	if task.StorageBackend == "" || task.SyncStatus == model.BTSyncNone {
 		return task, nil
 	}
 	if s.storage == nil {
@@ -115,7 +115,7 @@ func (s *Service) syncOneFileByIndex(ctx context.Context, taskID int64, fileInde
 	if err != nil {
 		return err
 	}
-	if task.StorageBackendID == nil {
+	if task.StorageBackend == "" {
 		return nil
 	}
 	files, err := s.listSyncableFiles(ctx, taskID)
@@ -185,7 +185,7 @@ func (s *Service) syncSingleFile(ctx context.Context, task model.BTTask, file mo
 	}
 	defer reader.Close()
 
-	backend, err := s.storage.OpenByID(ctx, *task.StorageBackendID)
+	backend, err := s.storage.OpenByName(ctx, task.StorageBackend)
 	if err != nil {
 		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, err.Error())
 		return err
@@ -342,29 +342,29 @@ func (s *Service) resolveDestination(
 	ctx context.Context,
 	options AddOptions,
 	infoHash string,
-) (savePath string, prefix string, backendID *int64, syncStatus string, err error) {
+) (savePath string, prefix string, backendName string, syncStatus string, err error) {
 	prefix = strings.TrimSpace(options.Subdirectory)
-	if s.storage == nil || options.StorageBackendID <= 0 {
+	backendName = strings.TrimSpace(options.StorageBackend)
+	if s.storage == nil || backendName == "" {
 		savePath, err = s.config.ResolveTaskDir(options.Subdirectory)
 		if err != nil {
-			return "", "", nil, "", fmt.Errorf("%w: %v", ErrInvalidInput, err)
+			return "", "", "", "", fmt.Errorf("%w: %v", ErrInvalidInput, err)
 		}
-		return savePath, prefix, nil, model.BTSyncNone, nil
+		return savePath, prefix, "", model.BTSyncNone, nil
 	}
-	id := options.StorageBackendID
 	savePath, syncStatus, _, err = s.storage.ResolveForBT(
-		ctx, id, options.Subdirectory, s.config.DownloadDir, infoHash,
+		ctx, backendName, options.Subdirectory, s.config.DownloadDir, infoHash,
 	)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) ||
 			errors.Is(err, storage.ErrInvalidInput) ||
 			errors.Is(err, storage.ErrUnavailable) {
-			return "", "", nil, "", fmt.Errorf("%w: %v", ErrInvalidInput, err)
+			return "", "", "", "", fmt.Errorf("%w: %v", ErrInvalidInput, err)
 		}
-		return "", "", nil, "", err
+		return "", "", "", "", err
 	}
 	cleaned, _ := cleanStoragePrefix(prefix)
-	return savePath, cleaned, &id, syncStatus, nil
+	return savePath, cleaned, backendName, syncStatus, nil
 }
 
 func cleanStoragePrefix(raw string) (string, error) {
@@ -380,7 +380,7 @@ func cleanStoragePrefix(raw string) (string, error) {
 }
 
 func (s *Service) maybeEnqueuePerFileSyncs(ctx context.Context, task model.BTTask) {
-	if task.StorageBackendID == nil ||
+	if task.StorageBackend == "" ||
 		task.SyncStatus == model.BTSyncNone ||
 		task.SyncStrategy != model.BTSyncStrategyPerFile {
 		return

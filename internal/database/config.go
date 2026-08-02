@@ -7,9 +7,7 @@ import (
 )
 
 const (
-	DriverSQLite   = "sqlite"
-	DriverPostgres = "postgres"
-	DriverMySQL    = "mysql"
+	DriverSQLite = "sqlite"
 
 	defaultSQLiteDSN = "/data/home-gateway.db"
 )
@@ -26,15 +24,9 @@ func ConfigFromEnv() (Config, error) {
 	if driver == "" {
 		driver = DriverSQLite
 	}
-	if driver == "pgsql" || driver == "postgresql" {
-		driver = DriverPostgres
-	}
 
 	dsn := strings.TrimSpace(os.Getenv("DB_DSN"))
 	if dsn == "" {
-		if driver != DriverSQLite {
-			return Config{}, fmt.Errorf("DB_DSN is required for %s", driver)
-		}
 		dsn = defaultSQLiteDSN
 	}
 
@@ -45,12 +37,10 @@ func ConfigFromEnv() (Config, error) {
 	return config, nil
 }
 
-// Validate verifies that the selected database is supported and configured.
+// Validate verifies that SQLite is selected and configured.
 func (c Config) Validate() error {
-	switch c.Driver {
-	case DriverSQLite, DriverPostgres, DriverMySQL:
-	default:
-		return fmt.Errorf("unsupported database driver %q", c.Driver)
+	if c.Driver != DriverSQLite {
+		return fmt.Errorf("unsupported database driver %q; only sqlite is supported", c.Driver)
 	}
 	if strings.TrimSpace(c.DSN) == "" {
 		return fmt.Errorf("database DSN must not be empty")

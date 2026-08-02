@@ -3,7 +3,6 @@ package user
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -14,28 +13,12 @@ import (
 )
 
 func TestCreateAndUpdatePassword(t *testing.T) {
-	testCases := []database.Config{{
+	ctx := context.Background()
+	config := database.Config{
 		Driver: database.DriverSQLite,
 		DSN:    filepath.Join(t.TempDir(), "users.db"),
-	}}
-	if dsn := os.Getenv("TEST_POSTGRES_DSN"); dsn != "" {
-		testCases = append(testCases, database.Config{Driver: database.DriverPostgres, DSN: dsn})
-	}
-	if dsn := os.Getenv("TEST_MYSQL_DSN"); dsn != "" {
-		testCases = append(testCases, database.Config{Driver: database.DriverMySQL, DSN: dsn})
 	}
 
-	for _, config := range testCases {
-		t.Run(config.Driver, func(t *testing.T) {
-			testCreateAndUpdatePassword(t, config)
-		})
-	}
-}
-
-func testCreateAndUpdatePassword(t *testing.T, config database.Config) {
-	t.Helper()
-
-	ctx := context.Background()
 	db, err := database.Open(ctx, config)
 	if err != nil {
 		t.Fatal(err)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/goccy/go-yaml"
@@ -18,9 +19,13 @@ const (
 	DefaultSyncConcurrency = 2
 )
 
+var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
 // Config contains file-backed application settings.
 type Config struct {
-	BT BTConfig `yaml:"bt" json:"bt"`
+	BT      BTConfig      `yaml:"bt" json:"bt"`
+	Storage StorageConfig `yaml:"storage" json:"storage"`
+	DNS     DNSConfig     `yaml:"dns" json:"dns"`
 }
 
 // BTConfig controls the embedded BitTorrent client.
@@ -33,6 +38,31 @@ type BTConfig struct {
 	SeedRatioLimit   float64 `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
 	SyncStrategy     string  `yaml:"sync_strategy" json:"syncStrategy"`
 	SyncConcurrency  int     `yaml:"sync_concurrency" json:"syncConcurrency"`
+}
+
+// StorageConfig holds named storage backends from YAML.
+type StorageConfig struct {
+	Backends []StorageBackendConfig `yaml:"backends" json:"backends"`
+}
+
+// StorageBackendConfig is one named destination.
+type StorageBackendConfig struct {
+	Name    string         `yaml:"name" json:"name"`
+	Type    string         `yaml:"type" json:"type"`
+	Config  map[string]any `yaml:"config" json:"config"`
+	Secret  string         `yaml:"secret" json:"secret,omitempty"`
+	Enabled *bool          `yaml:"enabled" json:"enabled"`
+}
+
+// DNSConfig holds Cloudflare connection settings.
+type DNSConfig struct {
+	Cloudflare CloudflareConfig `yaml:"cloudflare" json:"cloudflare"`
+}
+
+// CloudflareConfig lists API token and managed zones.
+type CloudflareConfig struct {
+	Token string   `yaml:"token" json:"token,omitempty"`
+	Zones []string `yaml:"zones" json:"zones"`
 }
 
 // Default returns safe settings when the default config file is absent.
@@ -82,6 +112,28 @@ func Save(path string, config Config) error {
 	return nil
 }
 
+// ExpandEnv replaces ${VAR} and $VAR references. Missing variables return an error.
+func ExpandEnv(value string) (string, error) {
+	var missing []string
+	expanded := envPattern.ReplaceAllStringFunc(value, func(match string) string {
+		groups := envPattern.FindStringSubmatch(match)
+		name := groups[1]
+		if name == "" {
+			name = groups[2]
+		}
+		envValue, ok := os.LookupEnv(name)
+		if !ok {
+			missing = append(missing, name)
+			return ""
+		}
+		return envValue
+	})
+	if len(missing) > 0 {
+		return "", fmt.Errorf("missing environment variables: %s", strings.Join(missing, ", "))
+	}
+	return expanded, nil
+}
+
 func normalize(config Config, configPath string) (Config, error) {
 	if strings.TrimSpace(config.BT.DownloadDir) == "" {
 		config.BT.DownloadDir = DefaultDownloadDir
@@ -121,7 +173,91 @@ func normalize(config Config, configPath string) (Config, error) {
 		return Config{}, fmt.Errorf("resolve bt.download_dir: %w", err)
 	}
 	config.BT.DownloadDir = filepath.Clean(absolute)
+
+	expanded, err := expandStorage(config.Storage)
+	if err != nil {
+		return Config{}, err
+	}
+	config.Storage = expanded
+
+	dnsExpanded, err := expandDNS(config.DNS)
+	if err != nil {
+		return Config{}, err
+	}
+	config.DNS = dnsExpanded
 	return config, nil
+}
+
+func expandStorage(storage StorageConfig) (StorageConfig, error) {
+	seen := make(map[string]struct{}, len(storage.Backends))
+	for index := range storage.Backends {
+		backend := &storage.Backends[index]
+		backend.Name = strings.TrimSpace(backend.Name)
+		backend.Type = strings.TrimSpace(strings.ToLower(backend.Type))
+		if backend.Name == "" || len(backend.Name) > 128 {
+			return StorageConfig{}, fmt.Errorf("storage.backends[%d].name must contain 1 to 128 characters", index)
+		}
+		if _, exists := seen[backend.Name]; exists {
+			return StorageConfig{}, fmt.Errorf("storage.backends: duplicate name %q", backend.Name)
+		}
+		seen[backend.Name] = struct{}{}
+		switch backend.Type {
+		case "local", "smb", "s3":
+		default:
+			return StorageConfig{}, fmt.Errorf("storage.backends[%d].type must be local, smb, or s3", index)
+		}
+		if backend.Config == nil {
+			backend.Config = map[string]any{}
+		}
+		for key, value := range backend.Config {
+			text, ok := value.(string)
+			if !ok {
+				continue
+			}
+			expanded, err := ExpandEnv(text)
+			if err != nil {
+				return StorageConfig{}, fmt.Errorf("storage.backends[%d].config.%s: %w", index, key, err)
+			}
+			backend.Config[key] = expanded
+		}
+		if backend.Secret != "" {
+			expanded, err := ExpandEnv(backend.Secret)
+			if err != nil {
+				return StorageConfig{}, fmt.Errorf("storage.backends[%d].secret: %w", index, err)
+			}
+			backend.Secret = expanded
+		}
+	}
+	return storage, nil
+}
+
+func expandDNS(dns DNSConfig) (DNSConfig, error) {
+	token := strings.TrimSpace(dns.Cloudflare.Token)
+	if token != "" {
+		expanded, err := ExpandEnv(token)
+		if err != nil {
+			return DNSConfig{}, fmt.Errorf("dns.cloudflare.token: %w", err)
+		}
+		dns.Cloudflare.Token = expanded
+	}
+	zones := make([]string, 0, len(dns.Cloudflare.Zones))
+	seen := make(map[string]struct{}, len(dns.Cloudflare.Zones))
+	for _, zone := range dns.Cloudflare.Zones {
+		zone = strings.TrimSpace(strings.ToLower(zone))
+		if zone == "" {
+			return DNSConfig{}, errors.New("dns.cloudflare.zones entries must be non-empty")
+		}
+		if _, exists := seen[zone]; exists {
+			continue
+		}
+		seen[zone] = struct{}{}
+		zones = append(zones, zone)
+	}
+	dns.Cloudflare.Zones = zones
+	if len(zones) > 0 && strings.TrimSpace(dns.Cloudflare.Token) == "" {
+		return DNSConfig{}, errors.New("dns.cloudflare.token is required when zones are configured")
+	}
+	return dns, nil
 }
 
 // ResolveTaskDir safely resolves a task subdirectory beneath DownloadDir.

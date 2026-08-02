@@ -46,6 +46,53 @@ func TestMissingOptionalConfigUsesDefaults(t *testing.T) {
 	}
 }
 
+func TestExpandEnvRequiresPresentVariables(t *testing.T) {
+	t.Setenv("HOME_GATEWAY_TEST_SECRET", "s3cret")
+	value, err := ExpandEnv("prefix-${HOME_GATEWAY_TEST_SECRET}-suffix")
+	if err != nil || value != "prefix-s3cret-suffix" {
+		t.Fatalf("unexpected expand result %q (%v)", value, err)
+	}
+	if _, err := ExpandEnv("${HOME_GATEWAY_MISSING_SECRET}"); err == nil {
+		t.Fatal("expected missing env var to fail")
+	}
+}
+
+func TestLoadStorageAndDNSConfig(t *testing.T) {
+	t.Setenv("CF_API_TOKEN", "cf-token")
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	downloadRoot := filepath.ToSlash(filepath.Join(root, "media"))
+	if err := os.WriteFile(configPath, []byte(`
+bt:
+  download_dir: downloads
+storage:
+  backends:
+    - name: local
+      type: local
+      config:
+        root: "`+downloadRoot+`"
+dns:
+  cloudflare:
+    token: ${CF_API_TOKEN}
+    zones:
+      - Example.COM
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Load(configPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Storage.Backends) != 1 || config.Storage.Backends[0].Name != "local" {
+		t.Fatalf("unexpected storage: %+v", config.Storage)
+	}
+	if config.DNS.Cloudflare.Token != "cf-token" ||
+		len(config.DNS.Cloudflare.Zones) != 1 ||
+		config.DNS.Cloudflare.Zones[0] != "example.com" {
+		t.Fatalf("unexpected dns: %+v", config.DNS.Cloudflare)
+	}
+}
+
 func TestSavePersistsRateAndSeedSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	config := Default()

@@ -6,8 +6,7 @@ import (
 	"net/http"
 	"path"
 	"strconv"
-
-	"home-gateway/internal/credential"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -26,18 +25,15 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) Register(api *gin.RouterGroup) {
 	group := api.Group("/storage")
 	group.GET("/backends", h.listBackends)
-	group.POST("/backends", h.createBackend)
 	group.POST("/backends/test", h.testDraft)
-	group.GET("/backends/:backendID", h.getBackend)
-	group.PUT("/backends/:backendID", h.updateBackend)
-	group.DELETE("/backends/:backendID", h.deleteBackend)
-	group.POST("/backends/:backendID/test", h.testBackend)
-	group.GET("/backends/:backendID/entries", h.listEntries)
-	group.POST("/backends/:backendID/mkdir", h.mkdir)
-	group.POST("/backends/:backendID/rename", h.rename)
-	group.DELETE("/backends/:backendID/entries", h.removeEntry)
-	group.GET("/backends/:backendID/download", h.download)
-	group.POST("/backends/:backendID/upload", h.upload)
+	group.GET("/backends/:name", h.getBackend)
+	group.POST("/backends/:name/test", h.testBackend)
+	group.GET("/backends/:name/entries", h.listEntries)
+	group.POST("/backends/:name/mkdir", h.mkdir)
+	group.POST("/backends/:name/rename", h.rename)
+	group.DELETE("/backends/:name/entries", h.removeEntry)
+	group.GET("/backends/:name/download", h.download)
+	group.POST("/backends/:name/upload", h.upload)
 }
 
 func (h *Handler) listBackends(c *gin.Context) {
@@ -50,70 +46,24 @@ func (h *Handler) listBackends(c *gin.Context) {
 }
 
 func (h *Handler) getBackend(c *gin.Context) {
-	id, ok := backendID(c)
+	name, ok := backendName(c)
 	if !ok {
 		return
 	}
-	item, err := h.service.GetBackend(c.Request.Context(), id)
+	item, err := h.service.GetBackend(c.Request.Context(), name)
 	if err != nil {
 		writeStorageError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"backend": item})
-}
-
-func (h *Handler) createBackend(c *gin.Context) {
-	var request CreateBackendRequest
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256*1024)
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid storage backend"})
-		return
-	}
-	item, err := h.service.CreateBackend(c.Request.Context(), request)
-	if err != nil {
-		writeStorageError(c, err)
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{"backend": item})
-}
-
-func (h *Handler) updateBackend(c *gin.Context) {
-	id, ok := backendID(c)
-	if !ok {
-		return
-	}
-	var request CreateBackendRequest
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256*1024)
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid storage backend"})
-		return
-	}
-	item, err := h.service.UpdateBackend(c.Request.Context(), id, request)
-	if err != nil {
-		writeStorageError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"backend": item})
-}
-
-func (h *Handler) deleteBackend(c *gin.Context) {
-	id, ok := backendID(c)
-	if !ok {
-		return
-	}
-	if err := h.service.DeleteBackend(c.Request.Context(), id); err != nil {
-		writeStorageError(c, err)
-		return
-	}
-	c.Status(http.StatusNoContent)
 }
 
 func (h *Handler) testBackend(c *gin.Context) {
-	id, ok := backendID(c)
+	name, ok := backendName(c)
 	if !ok {
 		return
 	}
-	if err := h.service.TestBackend(c.Request.Context(), id); err != nil {
+	if err := h.service.TestBackend(c.Request.Context(), name); err != nil {
 		writeStorageError(c, err)
 		return
 	}
@@ -121,7 +71,7 @@ func (h *Handler) testBackend(c *gin.Context) {
 }
 
 func (h *Handler) testDraft(c *gin.Context) {
-	var request CreateBackendRequest
+	var request DraftBackendRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256*1024)
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid storage backend"})
@@ -135,11 +85,11 @@ func (h *Handler) testDraft(c *gin.Context) {
 }
 
 func (h *Handler) listEntries(c *gin.Context) {
-	id, ok := backendID(c)
+	name, ok := backendName(c)
 	if !ok {
 		return
 	}
-	entries, err := h.service.ListEntries(c.Request.Context(), id, c.Query("path"))
+	entries, err := h.service.ListEntries(c.Request.Context(), name, c.Query("path"))
 	if err != nil {
 		writeStorageError(c, err)
 		return
@@ -148,7 +98,7 @@ func (h *Handler) listEntries(c *gin.Context) {
 }
 
 func (h *Handler) mkdir(c *gin.Context) {
-	id, ok := backendID(c)
+	name, ok := backendName(c)
 	if !ok {
 		return
 	}
@@ -159,7 +109,7 @@ func (h *Handler) mkdir(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "path is required"})
 		return
 	}
-	if err := h.service.Mkdir(c.Request.Context(), id, request.Path); err != nil {
+	if err := h.service.Mkdir(c.Request.Context(), name, request.Path); err != nil {
 		writeStorageError(c, err)
 		return
 	}
@@ -167,7 +117,7 @@ func (h *Handler) mkdir(c *gin.Context) {
 }
 
 func (h *Handler) rename(c *gin.Context) {
-	id, ok := backendID(c)
+	name, ok := backendName(c)
 	if !ok {
 		return
 	}
@@ -179,7 +129,7 @@ func (h *Handler) rename(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to are required"})
 		return
 	}
-	if err := h.service.Rename(c.Request.Context(), id, request.From, request.To); err != nil {
+	if err := h.service.Rename(c.Request.Context(), name, request.From, request.To); err != nil {
 		writeStorageError(c, err)
 		return
 	}
@@ -187,12 +137,12 @@ func (h *Handler) rename(c *gin.Context) {
 }
 
 func (h *Handler) removeEntry(c *gin.Context) {
-	id, ok := backendID(c)
+	name, ok := backendName(c)
 	if !ok {
 		return
 	}
 	recursive, _ := strconv.ParseBool(c.Query("recursive"))
-	if err := h.service.Remove(c.Request.Context(), id, c.Query("path"), recursive); err != nil {
+	if err := h.service.Remove(c.Request.Context(), name, c.Query("path"), recursive); err != nil {
 		writeStorageError(c, err)
 		return
 	}
@@ -200,12 +150,12 @@ func (h *Handler) removeEntry(c *gin.Context) {
 }
 
 func (h *Handler) download(c *gin.Context) {
-	id, ok := backendID(c)
+	name, ok := backendName(c)
 	if !ok {
 		return
 	}
 	filePath := c.Query("path")
-	backend, err := h.service.OpenByID(c.Request.Context(), id)
+	backend, err := h.service.OpenByName(c.Request.Context(), name)
 	if err != nil {
 		writeStorageError(c, err)
 		return
@@ -223,7 +173,7 @@ func (h *Handler) download(c *gin.Context) {
 }
 
 func (h *Handler) upload(c *gin.Context) {
-	id, ok := backendID(c)
+	name, ok := backendName(c)
 	if !ok {
 		return
 	}
@@ -242,7 +192,7 @@ func (h *Handler) upload(c *gin.Context) {
 	if filePath == "" {
 		filePath = header.Filename
 	}
-	backend, err := h.service.OpenByID(c.Request.Context(), id)
+	backend, err := h.service.OpenByName(c.Request.Context(), name)
 	if err != nil {
 		writeStorageError(c, err)
 		return
@@ -265,13 +215,13 @@ func (h *Handler) upload(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"path": filePath})
 }
 
-func backendID(c *gin.Context) (int64, bool) {
-	id, err := strconv.ParseInt(c.Param("backendID"), 10, 64)
-	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid storage backend ID"})
-		return 0, false
+func backendName(c *gin.Context) (string, bool) {
+	name := strings.TrimSpace(c.Param("name"))
+	if name == "" || name == "test" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid storage backend name"})
+		return "", false
 	}
-	return id, true
+	return name, true
 }
 
 func writeStorageError(c *gin.Context, err error) {
@@ -286,8 +236,6 @@ func writeStorageError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, gin.H{"error": ErrNotEmpty.Error()})
 	case errors.Is(err, ErrUnavailable):
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-	case errors.Is(err, credential.ErrNotConfigured):
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "credential encryption key is not configured"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage operation failed"})
 	}

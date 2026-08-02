@@ -11,6 +11,7 @@ import (
 	"home-gateway/internal/bt"
 	appconfig "home-gateway/internal/config"
 	"home-gateway/internal/database"
+	"home-gateway/internal/dns"
 
 	"github.com/gin-gonic/gin"
 )
@@ -82,7 +83,10 @@ func TestDNSRoutesRequireSession(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/dns/zones", nil)
-	New(db).ServeHTTP(recorder, request)
+	NewWithServices(Services{
+		Database: db,
+		DNS:      dns.NewService(appconfig.Default().DNS.Cloudflare),
+	}).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
 	}
@@ -105,7 +109,7 @@ func TestBTRoutesRequireSession(t *testing.T) {
 	defer service.Close()
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/bt/settings", nil)
-	NewWithServices(db, service, nil).ServeHTTP(recorder, request)
+	NewWithServices(Services{Database: db, BT: service}).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
 	}

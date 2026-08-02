@@ -15,7 +15,7 @@ export interface BTTask {
   peers: number
   ratio: number
   seedingPaused?: boolean
-  storageBackendId?: number
+  storageBackend?: string
   storagePrefix?: string
   syncStrategy?: string
   syncStatus?: string

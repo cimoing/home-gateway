@@ -115,7 +115,7 @@ func (s *Service) enrichTask(ctx context.Context, task model.BTTask) model.BTTas
 		eta := (task.TotalBytes - task.CompletedBytes) / task.DownloadRate
 		task.ETASeconds = &eta
 	}
-	if task.StorageBackendID != nil &&
+	if task.StorageBackend != "" &&
 		task.SyncStatus != model.BTSyncNone &&
 		task.SyncStrategy == model.BTSyncStrategyPerFile {
 		s.maybeEnqueuePerFileSyncs(ctx, task)

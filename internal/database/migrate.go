@@ -13,11 +13,10 @@ import (
 
 var migrationMu sync.Mutex
 
-// Migrate applies all pending migrations for the selected database dialect.
+// Migrate applies all pending SQLite migrations.
 func Migrate(ctx context.Context, db *sqlx.DB, driver string) error {
-	dialect, directory, err := migrationSettings(driver)
-	if err != nil {
-		return err
+	if driver != DriverSQLite {
+		return fmt.Errorf("unsupported database driver %q; only sqlite is supported", driver)
 	}
 
 	// Goose's embedded filesystem and dialect configuration are package-global.
@@ -25,24 +24,11 @@ func Migrate(ctx context.Context, db *sqlx.DB, driver string) error {
 	defer migrationMu.Unlock()
 
 	goose.SetBaseFS(migrations.Files)
-	if err := goose.SetDialect(dialect); err != nil {
+	if err := goose.SetDialect("sqlite3"); err != nil {
 		return fmt.Errorf("set migration dialect: %w", err)
 	}
-	if err := goose.UpContext(ctx, db.DB, directory); err != nil {
-		return fmt.Errorf("migrate %s database: %w", driver, err)
+	if err := goose.UpContext(ctx, db.DB, "sqlite"); err != nil {
+		return fmt.Errorf("migrate sqlite database: %w", err)
 	}
 	return nil
-}
-
-func migrationSettings(driver string) (dialect string, directory string, err error) {
-	switch driver {
-	case DriverSQLite:
-		return "sqlite3", "sqlite", nil
-	case DriverPostgres:
-		return "postgres", "postgres", nil
-	case DriverMySQL:
-		return "mysql", "mysql", nil
-	default:
-		return "", "", fmt.Errorf("unsupported database driver %q", driver)
-	}
 }

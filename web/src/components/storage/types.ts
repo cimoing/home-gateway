@@ -1,15 +1,11 @@
 export type StorageType = 'local' | 'smb' | 's3'
 
 export interface StorageBackend {
-  id: number
   name: string
   type: StorageType
   config: Record<string, unknown>
-  secretHint?: string
   hasSecret: boolean
   enabled: boolean
-  createdAt: string
-  updatedAt: string
 }
 
 export interface StorageEntry {

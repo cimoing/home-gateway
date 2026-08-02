@@ -12,7 +12,7 @@ import (
 
 	"home-gateway/internal/bt"
 	appconfig "home-gateway/internal/config"
-	"home-gateway/internal/credential"
+	"home-gateway/internal/dns"
 	"home-gateway/internal/router"
 	"home-gateway/internal/storage"
 
@@ -65,10 +65,8 @@ func runServer(cmd *cobra.Command) error {
 		}
 		engine = anacrolix
 	}
-	storageService := storage.NewService(db, credential.FromEnv())
-	if err := storageService.EnsureDefaultLocalBackend(cmd.Context(), config.BT.DownloadDir); err != nil {
-		return fmt.Errorf("seed default storage backend: %w", err)
-	}
+	storageService := storage.NewService(config.Storage.Backends)
+	dnsService := dns.NewService(config.DNS.Cloudflare)
 	btService := bt.NewServiceWithStorage(db, engine, storageService, config.BT, configPath)
 	defer func() {
 		if err := btService.Close(); err != nil {
@@ -79,14 +77,32 @@ func runServer(cmd *cobra.Command) error {
 		return fmt.Errorf("restore BitTorrent tasks: %w", err)
 	}
 
+	reload := func() error {
+		reloaded, err := appconfig.Load(configPath, true)
+		if err != nil {
+			return err
+		}
+		storageService.Replace(reloaded.Storage.Backends)
+		dnsService.Replace(reloaded.DNS.Cloudflare)
+		btService.ApplyConfig(reloaded.BT)
+		log.Printf("configuration reloaded from %s", configPath)
+		return nil
+	}
+
 	address := os.Getenv("SERVER_ADDR")
 	if address == "" {
 		address = ":8080"
 	}
 
 	server := &http.Server{
-		Addr:              address,
-		Handler:           router.NewWithServices(db, btService, storageService),
+		Addr: address,
+		Handler: router.NewWithServices(router.Services{
+			Database: db,
+			BT:       btService,
+			Storage:  storageService,
+			DNS:      dnsService,
+			Reload:   reload,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

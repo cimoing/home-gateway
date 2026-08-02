@@ -2,7 +2,7 @@ package migrations
 
 import "embed"
 
-// Files contains migrations for every supported SQL dialect.
+// Files contains SQLite migrations.
 //
-//go:embed sqlite/*.sql postgres/*.sql mysql/*.sql
+//go:embed sqlite/*.sql
 var Files embed.FS

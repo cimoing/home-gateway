@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,27 +12,11 @@ import (
 )
 
 func TestLoginSessionAndLogout(t *testing.T) {
-	testCases := []database.Config{{
+	ctx := context.Background()
+	config := database.Config{
 		Driver: database.DriverSQLite,
 		DSN:    filepath.Join(t.TempDir(), "auth.db"),
-	}}
-	if dsn := os.Getenv("TEST_POSTGRES_DSN"); dsn != "" {
-		testCases = append(testCases, database.Config{Driver: database.DriverPostgres, DSN: dsn})
 	}
-	if dsn := os.Getenv("TEST_MYSQL_DSN"); dsn != "" {
-		testCases = append(testCases, database.Config{Driver: database.DriverMySQL, DSN: dsn})
-	}
-
-	for _, config := range testCases {
-		t.Run(config.Driver, func(t *testing.T) {
-			testLoginSessionAndLogout(t, config)
-		})
-	}
-}
-
-func testLoginSessionAndLogout(t *testing.T, config database.Config) {
-	t.Helper()
-	ctx := context.Background()
 
 	db, err := database.Open(ctx, config)
 	if err != nil {

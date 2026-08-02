@@ -3,7 +3,7 @@ package dns
 import (
 	"errors"
 	"net/http"
-	"strconv"
+	"strings"
 
 	"home-gateway/internal/cloudflare"
 
@@ -23,78 +23,12 @@ func NewHandler(service *Service) *Handler {
 // Register adds DNS management routes to an authenticated API group.
 func (h *Handler) Register(api *gin.RouterGroup) {
 	group := api.Group("/dns")
-	group.GET("/credentials", h.listCredentials)
-	group.POST("/credentials", h.createCredential)
-	group.PUT("/credentials/:credentialID", h.updateCredential)
-	group.DELETE("/credentials/:credentialID", h.deleteCredential)
-
 	group.GET("/zones", h.listZones)
-	group.POST("/zones", h.createZone)
-	group.DELETE("/zones/:zoneID", h.deleteZone)
-	group.POST("/zones/:zoneID/sync", h.syncZone)
-
-	group.GET("/zones/:zoneID/records", h.listRecords)
-	group.POST("/zones/:zoneID/records", h.createRecord)
-	group.PUT("/zones/:zoneID/records/:recordID", h.updateRecord)
-	group.DELETE("/zones/:zoneID/records/:recordID", h.deleteRecord)
-}
-
-func (h *Handler) listCredentials(c *gin.Context) {
-	items, err := h.service.ListCredentials(c.Request.Context())
-	if err != nil {
-		writeError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"credentials": items})
-}
-
-func (h *Handler) createCredential(c *gin.Context) {
-	var request struct {
-		Name  string `json:"name" binding:"required"`
-		Token string `json:"token" binding:"required"`
-	}
-	if !bindJSON(c, &request) {
-		return
-	}
-	item, err := h.service.CreateCredential(c.Request.Context(), request.Name, request.Token)
-	request.Token = ""
-	if err != nil {
-		writeError(c, err)
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{"credential": item})
-}
-
-func (h *Handler) updateCredential(c *gin.Context) {
-	id, ok := pathID(c, "credentialID")
-	if !ok {
-		return
-	}
-	var request struct {
-		Token string `json:"token" binding:"required"`
-	}
-	if !bindJSON(c, &request) {
-		return
-	}
-	item, err := h.service.UpdateCredential(c.Request.Context(), id, request.Token)
-	request.Token = ""
-	if err != nil {
-		writeError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"credential": item})
-}
-
-func (h *Handler) deleteCredential(c *gin.Context) {
-	id, ok := pathID(c, "credentialID")
-	if !ok {
-		return
-	}
-	if err := h.service.DeleteCredential(c.Request.Context(), id); err != nil {
-		writeError(c, err)
-		return
-	}
-	c.Status(http.StatusNoContent)
+	group.POST("/zones/:zoneName/sync", h.syncZone)
+	group.GET("/zones/:zoneName/records", h.listRecords)
+	group.POST("/zones/:zoneName/records", h.createRecord)
+	group.PUT("/zones/:zoneName/records/:recordID", h.updateRecord)
+	group.DELETE("/zones/:zoneName/records/:recordID", h.deleteRecord)
 }
 
 func (h *Handler) listZones(c *gin.Context) {
@@ -106,62 +40,37 @@ func (h *Handler) listZones(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"zones": zones})
 }
 
-func (h *Handler) createZone(c *gin.Context) {
-	var request struct {
-		CredentialID int64  `json:"credentialId" binding:"required"`
-		Name         string `json:"name" binding:"required"`
-	}
-	if !bindJSON(c, &request) {
-		return
-	}
-	zone, err := h.service.CreateZone(
-		c.Request.Context(),
-		request.CredentialID,
-		request.Name,
-	)
-	if err != nil {
-		writeError(c, err)
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{"zone": zone})
-}
-
-func (h *Handler) deleteZone(c *gin.Context) {
-	zoneID, ok := pathID(c, "zoneID")
-	if !ok {
-		return
-	}
-	if err := h.service.DeleteZone(c.Request.Context(), zoneID); err != nil {
-		writeError(c, err)
-		return
-	}
-	c.Status(http.StatusNoContent)
-}
-
 func (h *Handler) syncZone(c *gin.Context) {
-	zoneID, ok := pathID(c, "zoneID")
+	zoneName, ok := zoneNameParam(c)
 	if !ok {
 		return
 	}
-	records, err := h.service.SyncZone(c.Request.Context(), zoneID)
+	records, err := h.service.RefreshZone(c.Request.Context(), zoneName)
 	if err != nil {
 		writeError(c, err)
 		return
 	}
-	zone, err := h.service.zoneByID(c.Request.Context(), zoneID)
+	zones, err := h.service.ListZones(c.Request.Context())
 	if err != nil {
 		writeError(c, err)
 		return
+	}
+	var zone any
+	for _, item := range zones {
+		if strings.EqualFold(item.Name, zoneName) {
+			zone = item
+			break
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"zone": zone, "records": records})
 }
 
 func (h *Handler) listRecords(c *gin.Context) {
-	zoneID, ok := pathID(c, "zoneID")
+	zoneName, ok := zoneNameParam(c)
 	if !ok {
 		return
 	}
-	records, err := h.service.ListRecords(c.Request.Context(), zoneID)
+	records, err := h.service.ListRecords(c.Request.Context(), zoneName)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -170,7 +79,7 @@ func (h *Handler) listRecords(c *gin.Context) {
 }
 
 func (h *Handler) createRecord(c *gin.Context) {
-	zoneID, ok := pathID(c, "zoneID")
+	zoneName, ok := zoneNameParam(c)
 	if !ok {
 		return
 	}
@@ -178,7 +87,7 @@ func (h *Handler) createRecord(c *gin.Context) {
 	if !bindJSON(c, &input) {
 		return
 	}
-	record, err := h.service.CreateRecord(c.Request.Context(), zoneID, input)
+	record, err := h.service.CreateRecord(c.Request.Context(), zoneName, input)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -187,19 +96,20 @@ func (h *Handler) createRecord(c *gin.Context) {
 }
 
 func (h *Handler) updateRecord(c *gin.Context) {
-	zoneID, ok := pathID(c, "zoneID")
+	zoneName, ok := zoneNameParam(c)
 	if !ok {
 		return
 	}
-	recordID, ok := pathID(c, "recordID")
-	if !ok {
+	recordID := strings.TrimSpace(c.Param("recordID"))
+	if recordID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid record ID"})
 		return
 	}
 	var input cloudflare.RecordInput
 	if !bindJSON(c, &input) {
 		return
 	}
-	record, err := h.service.UpdateRecord(c.Request.Context(), zoneID, recordID, input)
+	record, err := h.service.UpdateRecord(c.Request.Context(), zoneName, recordID, input)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -208,19 +118,29 @@ func (h *Handler) updateRecord(c *gin.Context) {
 }
 
 func (h *Handler) deleteRecord(c *gin.Context) {
-	zoneID, ok := pathID(c, "zoneID")
+	zoneName, ok := zoneNameParam(c)
 	if !ok {
 		return
 	}
-	recordID, ok := pathID(c, "recordID")
-	if !ok {
+	recordID := strings.TrimSpace(c.Param("recordID"))
+	if recordID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid record ID"})
 		return
 	}
-	if err := h.service.DeleteRecord(c.Request.Context(), zoneID, recordID); err != nil {
+	if err := h.service.DeleteRecord(c.Request.Context(), zoneName, recordID); err != nil {
 		writeError(c, err)
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+func zoneNameParam(c *gin.Context) (string, bool) {
+	name := strings.TrimSpace(c.Param("zoneName"))
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid zone name"})
+		return "", false
+	}
+	return name, true
 }
 
 func bindJSON(c *gin.Context, target any) bool {
@@ -230,15 +150,6 @@ func bindJSON(c *gin.Context, target any) bool {
 		return false
 	}
 	return true
-}
-
-func pathID(c *gin.Context, name string) (int64, bool) {
-	id, err := strconv.ParseInt(c.Param(name), 10, 64)
-	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid resource ID"})
-		return 0, false
-	}
-	return id, true
 }
 
 func writeError(c *gin.Context, err error) {

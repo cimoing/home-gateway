@@ -4,72 +4,45 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
-// Open establishes and verifies a database connection.
+// Open establishes and verifies a SQLite database connection.
 func Open(ctx context.Context, config Config) (*sqlx.DB, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
 
-	driverName, dsn, err := connectionSettings(config)
+	dsn, err := sqliteDSN(config.DSN)
 	if err != nil {
 		return nil, err
 	}
 
-	db, err := sqlx.Open(driverName, dsn)
+	db, err := sqlx.Open("sqlite", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open %s database: %w", config.Driver, err)
+		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
 
-	configurePool(db, config.Driver)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("ping %s database: %w", config.Driver, err)
+		return nil, fmt.Errorf("ping sqlite database: %w", err)
 	}
 	return db, nil
 }
 
-func connectionSettings(config Config) (string, string, error) {
-	switch config.Driver {
-	case DriverSQLite:
-		separator := "?"
-		if strings.Contains(config.DSN, "?") {
-			separator = "&"
-		}
-		dsn := config.DSN + separator + "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
-		return "sqlite", dsn, nil
-	case DriverPostgres:
-		return "pgx", config.DSN, nil
-	case DriverMySQL:
-		mysqlConfig, err := mysql.ParseDSN(config.DSN)
-		if err != nil {
-			return "", "", fmt.Errorf("parse mysql DSN: %w", err)
-		}
-		mysqlConfig.ParseTime = true
-		mysqlConfig.Loc = time.UTC
-		return "mysql", mysqlConfig.FormatDSN(), nil
-	default:
-		return "", "", fmt.Errorf("unsupported database driver %q", config.Driver)
+func sqliteDSN(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("database DSN must not be empty")
 	}
-}
-
-func configurePool(db *sqlx.DB, driver string) {
-	if driver == DriverSQLite {
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
-		return
+	separator := "?"
+	if strings.Contains(raw, "?") {
+		separator = "&"
 	}
-
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxIdleTime(5 * time.Minute)
-	db.SetConnMaxLifetime(30 * time.Minute)
+	return raw + separator + "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", nil
 }

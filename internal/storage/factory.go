@@ -1,18 +1,20 @@
 package storage
 
 import (
-	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"strings"
 
+	"home-gateway/internal/config"
 	"home-gateway/internal/model"
 )
 
-// LocalConfig is persisted in config_json for local backends.
+// LocalConfig describes a local filesystem backend.
 type LocalConfig struct {
 	Root string `json:"root"`
 }
 
-// SMBConfigJSON is persisted in config_json for smb backends.
+// SMBConfigJSON describes an SMB backend.
 type SMBConfigJSON struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
@@ -21,7 +23,7 @@ type SMBConfigJSON struct {
 	Domain   string `json:"domain"`
 }
 
-// S3ConfigJSON is persisted in config_json for s3 backends.
+// S3ConfigJSON describes an S3-compatible backend.
 type S3ConfigJSON struct {
 	Endpoint       string `json:"endpoint"`
 	Region         string `json:"region"`
@@ -31,41 +33,53 @@ type S3ConfigJSON struct {
 	ForcePathStyle bool   `json:"forcePathStyle"`
 }
 
-// OpenBackend builds a live backend from a persisted row and decrypted secret.
-func OpenBackend(backend model.StorageBackend, secret string) (Backend, error) {
-	switch backend.Type {
+// OpenFromConfig builds a live backend from YAML settings.
+func OpenFromConfig(backend config.StorageBackendConfig) (Backend, error) {
+	secret := backend.Secret
+	switch strings.ToLower(strings.TrimSpace(backend.Type)) {
 	case model.StorageTypeLocal:
-		var cfg LocalConfig
-		if err := json.Unmarshal([]byte(backend.ConfigJSON), &cfg); err != nil {
-			return nil, fmt.Errorf("%w: invalid local config", ErrInvalidInput)
+		root := filepath.Clean(stringConfig(backend.Config, "root"))
+		if root == "" || !filepath.IsAbs(root) {
+			return nil, fmt.Errorf("%w: local root must be an absolute path", ErrInvalidInput)
 		}
-		return newLocalBackend(cfg.Root)
+		return newLocalBackend(root)
 	case model.StorageTypeSMB:
-		var cfg SMBConfigJSON
-		if err := json.Unmarshal([]byte(backend.ConfigJSON), &cfg); err != nil {
-			return nil, fmt.Errorf("%w: invalid smb config", ErrInvalidInput)
+		cfg := SMBConfigJSON{
+			Host:     stringConfig(backend.Config, "host"),
+			Share:    stringConfig(backend.Config, "share"),
+			Username: stringConfig(backend.Config, "username"),
+			Domain:   stringConfig(backend.Config, "domain"),
+			Port:     intConfig(backend.Config, "port", 445),
+		}
+		if cfg.Host == "" || cfg.Share == "" || cfg.Username == "" {
+			return nil, fmt.Errorf("%w: smb host, share, and username are required", ErrInvalidInput)
+		}
+		if strings.TrimSpace(secret) == "" {
+			return nil, fmt.Errorf("%w: smb password is required", ErrInvalidInput)
 		}
 		return newSMBBackend(smbConfig{
-			Host:     cfg.Host,
-			Port:     cfg.Port,
-			Share:    cfg.Share,
-			Username: cfg.Username,
-			Domain:   cfg.Domain,
-			Password: secret,
+			Host: cfg.Host, Port: cfg.Port, Share: cfg.Share,
+			Username: cfg.Username, Domain: cfg.Domain, Password: secret,
 		})
 	case model.StorageTypeS3:
-		var cfg S3ConfigJSON
-		if err := json.Unmarshal([]byte(backend.ConfigJSON), &cfg); err != nil {
-			return nil, fmt.Errorf("%w: invalid s3 config", ErrInvalidInput)
+		cfg := S3ConfigJSON{
+			Endpoint:       stringConfig(backend.Config, "endpoint"),
+			Region:         stringConfig(backend.Config, "region"),
+			Bucket:         stringConfig(backend.Config, "bucket"),
+			Prefix:         stringConfig(backend.Config, "prefix"),
+			AccessKeyID:    firstString(backend.Config, "accessKeyId", "access_key_id"),
+			ForcePathStyle: boolConfig(backend.Config, "forcePathStyle") || boolConfig(backend.Config, "force_path_style"),
+		}
+		if cfg.Bucket == "" || cfg.AccessKeyID == "" {
+			return nil, fmt.Errorf("%w: s3 bucket and access_key_id are required", ErrInvalidInput)
+		}
+		if strings.TrimSpace(secret) == "" {
+			return nil, fmt.Errorf("%w: s3 secret is required", ErrInvalidInput)
 		}
 		return newS3Backend(s3Config{
-			Endpoint:        cfg.Endpoint,
-			Region:          cfg.Region,
-			Bucket:          cfg.Bucket,
-			Prefix:          cfg.Prefix,
-			AccessKeyID:     cfg.AccessKeyID,
-			SecretAccessKey: secret,
-			ForcePathStyle:  cfg.ForcePathStyle,
+			Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket,
+			Prefix: cfg.Prefix, AccessKeyID: cfg.AccessKeyID,
+			SecretAccessKey: secret, ForcePathStyle: cfg.ForcePathStyle,
 		})
 	default:
 		return nil, fmt.Errorf("%w: unsupported storage type %q", ErrInvalidInput, backend.Type)
@@ -73,34 +87,69 @@ func OpenBackend(backend model.StorageBackend, secret string) (Backend, error) {
 }
 
 // PublicConfig returns non-secret config for API responses.
-func PublicConfig(backend model.StorageBackend) (map[string]any, error) {
-	switch backend.Type {
+func PublicConfig(backend config.StorageBackendConfig) map[string]any {
+	switch strings.ToLower(backend.Type) {
 	case model.StorageTypeLocal:
-		var cfg LocalConfig
-		if err := json.Unmarshal([]byte(backend.ConfigJSON), &cfg); err != nil {
-			return nil, err
-		}
-		return map[string]any{"root": cfg.Root}, nil
+		return map[string]any{"root": stringConfig(backend.Config, "root")}
 	case model.StorageTypeSMB:
-		var cfg SMBConfigJSON
-		if err := json.Unmarshal([]byte(backend.ConfigJSON), &cfg); err != nil {
-			return nil, err
-		}
 		return map[string]any{
-			"host": cfg.Host, "port": cfg.Port, "share": cfg.Share,
-			"username": cfg.Username, "domain": cfg.Domain,
-		}, nil
+			"host": stringConfig(backend.Config, "host"),
+			"port": intConfig(backend.Config, "port", 445),
+			"share": stringConfig(backend.Config, "share"),
+			"username": stringConfig(backend.Config, "username"),
+			"domain": stringConfig(backend.Config, "domain"),
+		}
 	case model.StorageTypeS3:
-		var cfg S3ConfigJSON
-		if err := json.Unmarshal([]byte(backend.ConfigJSON), &cfg); err != nil {
-			return nil, err
-		}
 		return map[string]any{
-			"endpoint": cfg.Endpoint, "region": cfg.Region, "bucket": cfg.Bucket,
-			"prefix": cfg.Prefix, "accessKeyId": cfg.AccessKeyID,
-			"forcePathStyle": cfg.ForcePathStyle,
-		}, nil
+			"endpoint": stringConfig(backend.Config, "endpoint"),
+			"region": stringConfig(backend.Config, "region"),
+			"bucket": stringConfig(backend.Config, "bucket"),
+			"prefix": stringConfig(backend.Config, "prefix"),
+			"accessKeyId": firstString(backend.Config, "accessKeyId", "access_key_id"),
+			"forcePathStyle": boolConfig(backend.Config, "forcePathStyle") || boolConfig(backend.Config, "force_path_style"),
+		}
 	default:
-		return map[string]any{}, nil
+		return map[string]any{}
 	}
+}
+
+func stringConfig(config map[string]any, key string) string {
+	if config == nil {
+		return ""
+	}
+	value, _ := config[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func firstString(config map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := stringConfig(config, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func intConfig(config map[string]any, key string, fallback int) int {
+	if config == nil {
+		return fallback
+	}
+	switch value := config[key].(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	case int64:
+		return int(value)
+	default:
+		return fallback
+	}
+}
+
+func boolConfig(config map[string]any, key string) bool {
+	if config == nil {
+		return false
+	}
+	value, _ := config[key].(bool)
+	return value
 }
