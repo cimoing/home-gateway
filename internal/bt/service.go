@@ -64,10 +64,11 @@ type Service struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
-	mu         sync.Mutex
-	samples    map[string]rateSample
-	global     rateSample
-	seedPaused map[string]bool
+	mu          sync.Mutex
+	samples     map[string]rateSample
+	peerSamples map[string]rateSample
+	global      rateSample
+	seedPaused  map[string]bool
 }
 
 // NewService creates a BT task service. engine may be nil when disabled.
@@ -81,8 +82,9 @@ func NewService(
 	service := &Service{
 		db: db, engine: engine, config: config, configPath: configPath,
 		ctx: ctx, cancel: cancel,
-		samples:    make(map[string]rateSample),
-		seedPaused: make(map[string]bool),
+		samples:     make(map[string]rateSample),
+		peerSamples: make(map[string]rateSample),
+		seedPaused:  make(map[string]bool),
 	}
 	if engine != nil {
 		service.wg.Add(1)

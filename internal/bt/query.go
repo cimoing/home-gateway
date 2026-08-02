@@ -128,7 +128,7 @@ func (s *Service) enrichTask(ctx context.Context, task model.BTTask) model.BTTas
 	return task
 }
 
-// Peers returns connected peers for a task.
+// Peers returns connected peers for a task with sampled transfer rates.
 func (s *Service) Peers(ctx context.Context, taskID int64) ([]PeerInfo, error) {
 	task, err := s.GetTask(ctx, taskID)
 	if err != nil {
@@ -138,7 +138,42 @@ func (s *Service) Peers(ctx context.Context, taskID int64) ([]PeerInfo, error) {
 	if !ok {
 		return nil, ErrUnavailable
 	}
-	return runtime.Peers(), nil
+	peers := runtime.Peers()
+	now := time.Now()
+	prefix := task.InfoHash + "\x00"
+	seen := make(map[string]struct{}, len(peers))
+
+	s.mu.Lock()
+	for index := range peers {
+		key := prefix + peers[index].Address + "\x00" + peers[index].PeerID
+		seen[key] = struct{}{}
+		previous, sampled := s.peerSamples[key]
+		s.peerSamples[key] = rateSample{
+			at: now, downloaded: peers[index].Downloaded, uploaded: peers[index].Uploaded,
+		}
+		if !sampled {
+			continue
+		}
+		seconds := now.Sub(previous.at).Seconds()
+		if seconds <= 0 {
+			continue
+		}
+		peers[index].DownloadRate = max(
+			0, int64(float64(peers[index].Downloaded-previous.downloaded)/seconds),
+		)
+		peers[index].UploadRate = max(
+			0, int64(float64(peers[index].Uploaded-previous.uploaded)/seconds),
+		)
+	}
+	for key := range s.peerSamples {
+		if strings.HasPrefix(key, prefix) {
+			if _, ok := seen[key]; !ok {
+				delete(s.peerSamples, key)
+			}
+		}
+	}
+	s.mu.Unlock()
+	return peers, nil
 }
 
 func (s *Service) runtimeTask(infoHash string) (EngineTask, bool) {

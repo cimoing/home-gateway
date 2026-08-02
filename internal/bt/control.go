@@ -186,6 +186,12 @@ func (s *Service) Delete(ctx context.Context, id int64, deleteData bool) error {
 	s.mu.Lock()
 	delete(s.samples, task.InfoHash)
 	delete(s.seedPaused, task.InfoHash)
+	prefix := task.InfoHash + "\x00"
+	for key := range s.peerSamples {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.peerSamples, key)
+		}
+	}
 	s.mu.Unlock()
 	return nil
 }

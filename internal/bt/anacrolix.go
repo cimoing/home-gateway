@@ -290,14 +290,12 @@ func (t *anacrolixTask) Peers() []PeerInfo {
 		}
 		stats := conn.Stats()
 		peers = append(peers, PeerInfo{
-			Address:      address,
-			PeerID:       formatPeerID(conn.PeerID),
-			Network:      conn.Network,
-			Source:       string(conn.Discovery),
-			Downloaded:   stats.BytesReadUsefulData.Int64(),
-			Uploaded:     stats.BytesWrittenData.Int64(),
-			DownloadRate: stats.DownloadRate,
-			UploadRate:   stats.LastWriteUploadRate,
+			Address:    address,
+			PeerID:     formatPeerID(conn.PeerID),
+			Network:    conn.Network,
+			Source:     string(conn.Discovery),
+			Downloaded: stats.BytesReadUsefulData.Int64(),
+			Uploaded:   stats.BytesWrittenData.Int64(),
 		})
 	}
 	return peers

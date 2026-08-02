@@ -67,14 +67,14 @@ type TaskStats struct {
 
 // PeerInfo describes one connected peer for a task.
 type PeerInfo struct {
-	Address      string  `json:"address"`
-	PeerID       string  `json:"peerId"`
-	Network      string  `json:"network"`
-	Source       string  `json:"source"`
-	Downloaded   int64   `json:"downloadedBytes"`
-	Uploaded     int64   `json:"uploadedBytes"`
-	DownloadRate float64 `json:"downloadRate"`
-	UploadRate   float64 `json:"uploadRate"`
+	Address      string `json:"address"`
+	PeerID       string `json:"peerId"`
+	Network      string `json:"network"`
+	Source       string `json:"source"`
+	Downloaded   int64  `json:"downloadedBytes"`
+	Uploaded     int64  `json:"uploadedBytes"`
+	DownloadRate int64  `json:"downloadRate"`
+	UploadRate   int64  `json:"uploadRate"`
 }
 
 // EngineStats contains process-wide BitTorrent gauges.
