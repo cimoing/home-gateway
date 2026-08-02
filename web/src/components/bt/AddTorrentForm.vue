@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { api } from '../../api/client'
-import type { StorageBackend } from '../storage/types'
 import type { BTSettings, BTTask } from './types'
 
 const props = defineProps<{ settings: BTSettings | null }>()
@@ -10,21 +9,15 @@ const source = ref<'magnet' | 'torrent'>('magnet')
 const file = ref<File | null>(null)
 const busy = ref(false)
 const error = ref('')
-const backends = ref<StorageBackend[]>([])
 const form = reactive({
   uri: '',
   subdirectory: '',
-  storageBackend: '',
   syncStrategy: 'complete',
   start: true,
 })
 
-const selectedBackend = computed(() =>
-  backends.value.find((item) => item.name === form.storageBackend),
-)
-const needsSync = computed(
-  () => !!selectedBackend.value && selectedBackend.value.type !== 'local',
-)
+const configuredBackend = computed(() => props.settings?.storageBackend || '')
+const showSyncStrategy = computed(() => !!configuredBackend.value)
 
 watch(
   () => props.settings?.syncStrategy,
@@ -33,17 +26,6 @@ watch(
   },
   { immediate: true },
 )
-
-onMounted(async () => {
-  try {
-    const data = await api<{ backends: StorageBackend[] }>('/api/storage/backends')
-    backends.value = (data.backends || []).filter((item) => item.enabled)
-    const local = backends.value.find((item) => item.type === 'local')
-    form.storageBackend = local?.name || backends.value[0]?.name || ''
-  } catch {
-    // Storage module may be unavailable during early boot; keep form usable.
-  }
-})
 
 function chooseFile(event: Event) {
   file.value = (event.target as HTMLInputElement).files?.[0] || null
@@ -57,8 +39,7 @@ async function submit() {
     const payload = {
       uri: form.uri,
       subdirectory: form.subdirectory,
-      storageBackend: form.storageBackend,
-      syncStrategy: needsSync.value ? form.syncStrategy : '',
+      syncStrategy: showSyncStrategy.value ? form.syncStrategy : '',
       start: form.start,
     }
     if (source.value === 'magnet') {
@@ -72,8 +53,7 @@ async function submit() {
       const body = new FormData()
       body.set('torrent', file.value)
       body.set('subdirectory', form.subdirectory)
-      if (form.storageBackend) body.set('storageBackend', form.storageBackend)
-      if (needsSync.value) body.set('syncStrategy', form.syncStrategy)
+      if (showSyncStrategy.value) body.set('syncStrategy', form.syncStrategy)
       body.set('start', String(form.start))
       result = await api('/api/bt/tasks/torrent', { method: 'POST', body })
       file.value = null
@@ -109,17 +89,13 @@ async function submit() {
       .torrent 文件
       <input type="file" accept=".torrent,application/x-bittorrent" required @change="chooseFile" />
     </label>
-    <label>
-      存储后端
-      <select v-model="form.storageBackend">
-        <option value="">默认下载目录</option>
-        <option v-for="backend in backends" :key="backend.name" :value="backend.name">
-          {{ backend.name }} ({{ backend.type }})
-        </option>
-      </select>
-      <small>名称来自配置文件；本地直写，远程先缓存再按策略同步。</small>
-    </label>
-    <label v-if="needsSync">
+    <p class="empty-state">
+      存储目标由配置 <code>bt.storage_backend</code> 决定
+      <template v-if="configuredBackend">（当前：{{ configuredBackend }}）</template>
+      <template v-else>（当前：本地文件系统）</template>
+      。
+    </p>
+    <label v-if="showSyncStrategy">
       同步策略
       <select v-model="form.syncStrategy">
         <option value="complete">全部下载完毕后同步</option>
@@ -130,7 +106,7 @@ async function submit() {
     <label>
       目标子目录
       <input v-model="form.subdirectory" placeholder="例如 linux/isos（留空使用根目录）" />
-      <small>相对于所选存储后端的路径。</small>
+      <small>相对于配置中的下载目录。</small>
     </label>
     <label class="checkbox-label">
       <input v-model="form.start" type="checkbox" />

@@ -53,7 +53,15 @@ function submit() {
       <div><dt>引擎</dt><dd>{{ settings.running ? '运行中' : '未运行' }}</dd></div>
       <div><dt>启用</dt><dd>{{ settings.enabled ? '是' : '否' }}</dd></div>
       <div><dt>监听端口</dt><dd>{{ settings.listenPort }} / TCP + UDP</dd></div>
-      <div><dt>默认下载根目录</dt><dd>{{ settings.downloadRoot }}</dd></div>
+      <div>
+        <dt>默认存储后端</dt>
+        <dd>{{ settings.storageBackend || '本地文件系统' }}</dd>
+      </div>
+      <div>
+        <dt>配置下载目录</dt>
+        <dd>{{ settings.downloadDir || (settings.storageBackend ? '（后端根目录）' : '—') }}</dd>
+      </div>
+      <div><dt>引擎本地目录</dt><dd>{{ settings.downloadRoot }}</dd></div>
     </dl>
     <form v-if="settings" class="settings-form" @submit.prevent="submit">
       <label>

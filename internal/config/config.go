@@ -14,6 +14,7 @@ import (
 const (
 	DefaultPath            = "/data/config.yaml"
 	DefaultDownloadDir     = "/data/downloads"
+	DefaultStagingDir      = "/data/.bt-staging"
 	DefaultListenPort      = 42069
 	DefaultSyncStrategy    = "complete"
 	DefaultSyncConcurrency = 2
@@ -31,6 +32,7 @@ type Config struct {
 // BTConfig controls the embedded BitTorrent client.
 type BTConfig struct {
 	Enabled          bool    `yaml:"enabled" json:"enabled"`
+	StorageBackend   string  `yaml:"storage_backend" json:"storageBackend"`
 	DownloadDir      string  `yaml:"download_dir" json:"downloadDir"`
 	ListenPort       int     `yaml:"listen_port" json:"listenPort"`
 	DownloadLimitBps int64   `yaml:"download_limit_bps" json:"downloadLimitBps"`
@@ -38,6 +40,13 @@ type BTConfig struct {
 	SeedRatioLimit   float64 `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
 	SyncStrategy     string  `yaml:"sync_strategy" json:"syncStrategy"`
 	SyncConcurrency  int     `yaml:"sync_concurrency" json:"syncConcurrency"`
+
+	// EngineDir is the local filesystem root used by the torrent engine.
+	// When StorageBackend is empty it equals the resolved DownloadDir; when the
+	// backend is remote it is a local staging directory.
+	EngineDir string `yaml:"-" json:"-"`
+	// StoragePrefix is DownloadDir cleaned as a path on the selected backend.
+	StoragePrefix string `yaml:"-" json:"-"`
 }
 
 // StorageConfig holds named storage backends from YAML.
@@ -164,21 +173,15 @@ func normalize(config Config, configPath string) (Config, error) {
 	if config.BT.SyncConcurrency < 1 || config.BT.SyncConcurrency > 32 {
 		return Config{}, errors.New("bt.sync_concurrency must be between 1 and 32")
 	}
-	if !filepath.IsAbs(config.BT.DownloadDir) {
-		base := filepath.Dir(configPath)
-		config.BT.DownloadDir = filepath.Join(base, config.BT.DownloadDir)
-	}
-	absolute, err := filepath.Abs(config.BT.DownloadDir)
-	if err != nil {
-		return Config{}, fmt.Errorf("resolve bt.download_dir: %w", err)
-	}
-	config.BT.DownloadDir = filepath.Clean(absolute)
-
 	expanded, err := expandStorage(config.Storage)
 	if err != nil {
 		return Config{}, err
 	}
 	config.Storage = expanded
+
+	if err := resolveBTPaths(&config, configPath); err != nil {
+		return Config{}, err
+	}
 
 	dnsExpanded, err := expandDNS(config.DNS)
 	if err != nil {
@@ -186,6 +189,111 @@ func normalize(config Config, configPath string) (Config, error) {
 	}
 	config.DNS = dnsExpanded
 	return config, nil
+}
+
+func resolveBTPaths(config *Config, configPath string) error {
+	config.BT.StorageBackend = strings.TrimSpace(config.BT.StorageBackend)
+	downloadDir := strings.TrimSpace(config.BT.DownloadDir)
+	if downloadDir == "" {
+		downloadDir = DefaultDownloadDir
+	}
+	config.BT.DownloadDir = downloadDir
+	config.BT.StoragePrefix = ""
+
+	if config.BT.StorageBackend == "" {
+		if !filepath.IsAbs(downloadDir) {
+			base := filepath.Dir(configPath)
+			downloadDir = filepath.Join(base, downloadDir)
+		}
+		absolute, err := filepath.Abs(downloadDir)
+		if err != nil {
+			return fmt.Errorf("resolve bt.download_dir: %w", err)
+		}
+		config.BT.DownloadDir = filepath.Clean(absolute)
+		config.BT.EngineDir = config.BT.DownloadDir
+		return nil
+	}
+
+	// Legacy default is an absolute local path; with a storage backend it means "backend root".
+	if downloadDir == DefaultDownloadDir {
+		downloadDir = ""
+		config.BT.DownloadDir = ""
+	}
+	prefix, err := cleanConfigRelativePath(downloadDir)
+	if err != nil {
+		return fmt.Errorf("bt.download_dir: %w", err)
+	}
+	config.BT.DownloadDir = prefix
+	var backend *StorageBackendConfig
+	for index := range config.Storage.Backends {
+		if config.Storage.Backends[index].Name == config.BT.StorageBackend {
+			backend = &config.Storage.Backends[index]
+			break
+		}
+	}
+	if backend == nil {
+		return fmt.Errorf("bt.storage_backend %q is not defined in storage.backends", config.BT.StorageBackend)
+	}
+	if backend.Enabled != nil && !*backend.Enabled {
+		return fmt.Errorf("bt.storage_backend %q is disabled", config.BT.StorageBackend)
+	}
+	config.BT.StoragePrefix = prefix
+	switch backend.Type {
+	case "local":
+		root, _ := backend.Config["root"].(string)
+		root = filepath.Clean(strings.TrimSpace(root))
+		if root == "" || !filepath.IsAbs(root) {
+			return fmt.Errorf("bt.storage_backend %q has invalid local root", config.BT.StorageBackend)
+		}
+		engineDir := root
+		if prefix != "" {
+			engineDir = filepath.Join(root, filepath.FromSlash(prefix))
+		}
+		relative, err := filepath.Rel(root, engineDir)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("bt.download_dir escapes storage backend root")
+		}
+		config.BT.EngineDir = filepath.Clean(engineDir)
+		return nil
+	case "smb", "s3":
+		config.BT.EngineDir = DefaultStagingDir
+		return nil
+	default:
+		return fmt.Errorf("bt.storage_backend type %q is unsupported", backend.Type)
+	}
+}
+
+func cleanConfigRelativePath(raw string) (string, error) {
+	raw = strings.ReplaceAll(raw, "\\", "/")
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "." {
+		return "", nil
+	}
+	if filepath.IsAbs(raw) || strings.HasPrefix(raw, "/") {
+		return "", errors.New("must be a relative path when bt.storage_backend is set")
+	}
+	for _, part := range strings.Split(raw, "/") {
+		if part == ".." {
+			return "", errors.New("must not contain '..'")
+		}
+	}
+	cleaned := pathCleanPOSIX(raw)
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", errors.New("must not escape storage root")
+	}
+	return cleaned, nil
+}
+
+func pathCleanPOSIX(raw string) string {
+	parts := strings.Split(raw, "/")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		out = append(out, part)
+	}
+	return strings.Join(out, "/")
 }
 
 func expandStorage(storage StorageConfig) (StorageConfig, error) {
@@ -260,17 +368,25 @@ func expandDNS(dns DNSConfig) (DNSConfig, error) {
 	return dns, nil
 }
 
-// ResolveTaskDir safely resolves a task subdirectory beneath DownloadDir.
+func (c BTConfig) engineRoot() string {
+	if strings.TrimSpace(c.EngineDir) != "" {
+		return c.EngineDir
+	}
+	return c.DownloadDir
+}
+
+// ResolveTaskDir safely resolves a task subdirectory beneath the engine root.
 func (c BTConfig) ResolveTaskDir(subdirectory string) (string, error) {
+	root := c.engineRoot()
 	subdirectory = strings.TrimSpace(subdirectory)
 	if subdirectory == "" || subdirectory == "." {
-		return c.DownloadDir, nil
+		return root, nil
 	}
 	if filepath.IsAbs(subdirectory) {
 		return "", errors.New("download subdirectory must be relative")
 	}
-	resolved := filepath.Clean(filepath.Join(c.DownloadDir, subdirectory))
-	relative, err := filepath.Rel(c.DownloadDir, resolved)
+	resolved := filepath.Clean(filepath.Join(root, subdirectory))
+	relative, err := filepath.Rel(root, resolved)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", errors.New("download subdirectory escapes configured root")
 	}
@@ -279,7 +395,7 @@ func (c BTConfig) ResolveTaskDir(subdirectory string) (string, error) {
 
 // RelativeTaskDir returns a safe path suitable for API responses.
 func (c BTConfig) RelativeTaskDir(path string) (string, error) {
-	relative, err := filepath.Rel(c.DownloadDir, filepath.Clean(path))
+	relative, err := filepath.Rel(c.engineRoot(), filepath.Clean(path))
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", errors.New("task path is outside configured root")
 	}

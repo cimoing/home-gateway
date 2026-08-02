@@ -28,6 +28,8 @@ type AddOptions struct {
 // Settings is the runtime configuration exposed to the UI.
 type Settings struct {
 	Enabled          bool    `json:"enabled"`
+	StorageBackend   string  `json:"storageBackend"`
+	DownloadDir      string  `json:"downloadDir"`
 	DownloadRoot     string  `json:"downloadRoot"`
 	ListenPort       int     `json:"listenPort"`
 	Running          bool    `json:"running"`
@@ -128,7 +130,9 @@ func (s *Service) Settings() Settings {
 	defer s.mu.Unlock()
 	return Settings{
 		Enabled:          s.config.Enabled,
-		DownloadRoot:     s.config.DownloadDir,
+		StorageBackend:   s.config.StorageBackend,
+		DownloadDir:      s.config.DownloadDir,
+		DownloadRoot:     s.config.EngineDir,
 		ListenPort:       s.config.ListenPort,
 		Running:          s.engine != nil,
 		DownloadLimitBps: s.config.DownloadLimitBps,
@@ -142,6 +146,10 @@ func (s *Service) Settings() Settings {
 // ApplyConfig updates mutable BT settings from a reloaded YAML file without restarting the engine.
 func (s *Service) ApplyConfig(config appconfig.BTConfig) {
 	s.mu.Lock()
+	s.config.StorageBackend = config.StorageBackend
+	s.config.DownloadDir = config.DownloadDir
+	s.config.EngineDir = config.EngineDir
+	s.config.StoragePrefix = config.StoragePrefix
 	s.config.DownloadLimitBps = config.DownloadLimitBps
 	s.config.UploadLimitBps = config.UploadLimitBps
 	s.config.SeedRatioLimit = config.SeedRatioLimit

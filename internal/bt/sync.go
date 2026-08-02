@@ -343,8 +343,14 @@ func (s *Service) resolveDestination(
 	options AddOptions,
 	infoHash string,
 ) (savePath string, prefix string, backendName string, syncStatus string, err error) {
-	prefix = strings.TrimSpace(options.Subdirectory)
 	backendName = strings.TrimSpace(options.StorageBackend)
+	if backendName == "" {
+		backendName = strings.TrimSpace(s.config.StorageBackend)
+	}
+	prefix, err = joinStoragePrefix(s.defaultStoragePrefix(backendName), options.Subdirectory)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
 	if s.storage == nil || backendName == "" {
 		savePath, err = s.config.ResolveTaskDir(options.Subdirectory)
 		if err != nil {
@@ -352,8 +358,12 @@ func (s *Service) resolveDestination(
 		}
 		return savePath, prefix, "", model.BTSyncNone, nil
 	}
+	stagingRoot := s.config.EngineDir
+	if stagingRoot == "" {
+		stagingRoot = s.config.DownloadDir
+	}
 	savePath, syncStatus, _, err = s.storage.ResolveForBT(
-		ctx, backendName, options.Subdirectory, s.config.DownloadDir, infoHash,
+		ctx, backendName, prefix, stagingRoot, infoHash,
 	)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) ||
@@ -363,8 +373,28 @@ func (s *Service) resolveDestination(
 		}
 		return "", "", "", "", err
 	}
-	cleaned, _ := cleanStoragePrefix(prefix)
-	return savePath, cleaned, backendName, syncStatus, nil
+	return savePath, prefix, backendName, syncStatus, nil
+}
+
+func (s *Service) defaultStoragePrefix(backendName string) string {
+	if backendName == "" || backendName != strings.TrimSpace(s.config.StorageBackend) {
+		return ""
+	}
+	return s.config.StoragePrefix
+}
+
+func joinStoragePrefix(parts ...string) (string, error) {
+	segments := make([]string, 0, len(parts))
+	for _, part := range parts {
+		cleaned, err := cleanStoragePrefix(part)
+		if err != nil {
+			return "", err
+		}
+		if cleaned != "" {
+			segments = append(segments, cleaned)
+		}
+	}
+	return strings.Join(segments, "/"), nil
 }
 
 func cleanStoragePrefix(raw string) (string, error) {

@@ -1,5 +1,10 @@
 bt:
   enabled: true
+  # Optional default storage backend name from storage.backends.
+  # Empty = local filesystem at download_dir.
+  # storage_backend: local
+  # When storage_backend is set, download_dir is a relative path on that backend.
+  # When unset, download_dir is a local filesystem path.
   download_dir: /data/downloads
   listen_port: 42069
   # 0 = unlimited (bytes per second)

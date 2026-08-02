@@ -50,6 +50,8 @@ export interface BTPeer {
 
 export interface BTSettings {
   enabled: boolean
+  storageBackend?: string
+  downloadDir?: string
   downloadRoot: string
   listenPort: number
   running: boolean

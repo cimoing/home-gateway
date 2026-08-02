@@ -51,11 +51,11 @@ func runServer(cmd *cobra.Command) error {
 
 	var engine bt.Engine
 	if config.BT.Enabled {
-		if err := ensureWritableDirectory(config.BT.DownloadDir); err != nil {
+		if err := ensureWritableDirectory(config.BT.EngineDir); err != nil {
 			return err
 		}
 		anacrolix, err := bt.NewAnacrolixEngine(
-			config.BT.DownloadDir,
+			config.BT.EngineDir,
 			config.BT.ListenPort,
 			config.BT.DownloadLimitBps,
 			config.BT.UploadLimitBps,
