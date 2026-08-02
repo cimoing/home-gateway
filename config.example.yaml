@@ -7,3 +7,7 @@ bt:
   upload_limit_bps: 0
   # 0 = disabled; pause seeding when share ratio reaches this value
   seed_ratio_limit: 0
+  # complete = sync after whole task finishes; per_file = sync each file when ready
+  sync_strategy: complete
+  # max concurrent uploads while syncing to remote storage
+  sync_concurrency: 2

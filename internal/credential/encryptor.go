@@ -16,9 +16,12 @@ import (
 
 var ErrNotConfigured = errors.New("credential encryption key is not configured")
 
-const associatedData = "home-gateway/cloudflare-token/v1"
+const (
+	CloudflareTokenAAD = "home-gateway/cloudflare-token/v1"
+	StorageSecretAAD   = "home-gateway/storage-secret/v1"
+)
 
-// Encryptor encrypts Cloudflare API tokens with AES-256-GCM.
+// Encryptor encrypts secrets with AES-256-GCM.
 type Encryptor struct {
 	aead cipher.AEAD
 }
@@ -59,38 +62,51 @@ func New(key []byte) (*Encryptor, error) {
 
 // Encrypt returns ciphertext, nonce, fingerprint, and a safe display hint.
 func (e *Encryptor) Encrypt(token string) ([]byte, []byte, string, string, error) {
+	return e.EncryptFor(CloudflareTokenAAD, token)
+}
+
+// Decrypt recovers a stored API token.
+func (e *Encryptor) Decrypt(ciphertext []byte, nonce []byte) (string, error) {
+	return e.DecryptFor(CloudflareTokenAAD, ciphertext, nonce)
+}
+
+// EncryptFor encrypts a secret under the provided associated data.
+func (e *Encryptor) EncryptFor(aad string, secret string) ([]byte, []byte, string, string, error) {
 	if e == nil || e.aead == nil {
 		return nil, nil, "", "", ErrNotConfigured
 	}
-	if token == "" {
-		return nil, nil, "", "", errors.New("Cloudflare API token must not be empty")
+	if secret == "" {
+		return nil, nil, "", "", errors.New("secret must not be empty")
 	}
-	if len(token) > 4096 {
-		return nil, nil, "", "", errors.New("Cloudflare API token is too long")
+	if len(secret) > 4096 {
+		return nil, nil, "", "", errors.New("secret is too long")
+	}
+	if strings.TrimSpace(aad) == "" {
+		return nil, nil, "", "", errors.New("associated data must not be empty")
 	}
 
 	nonce := make([]byte, e.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, nil, "", "", fmt.Errorf("generate credential nonce: %w", err)
 	}
-	ciphertext := e.aead.Seal(nil, nonce, []byte(token), []byte(associatedData))
-	sum := sha256.Sum256([]byte(token))
-	hint := token
+	ciphertext := e.aead.Seal(nil, nonce, []byte(secret), []byte(aad))
+	sum := sha256.Sum256([]byte(secret))
+	hint := secret
 	if len(hint) > 4 {
 		hint = hint[len(hint)-4:]
 	}
 	return ciphertext, nonce, hex.EncodeToString(sum[:]), hint, nil
 }
 
-// Decrypt recovers a stored API token.
-func (e *Encryptor) Decrypt(ciphertext []byte, nonce []byte) (string, error) {
+// DecryptFor recovers a secret encrypted with EncryptFor.
+func (e *Encryptor) DecryptFor(aad string, ciphertext []byte, nonce []byte) (string, error) {
 	if e == nil || e.aead == nil {
 		return "", ErrNotConfigured
 	}
 	if len(nonce) != e.aead.NonceSize() {
 		return "", errors.New("invalid credential nonce")
 	}
-	plaintext, err := e.aead.Open(nil, nonce, ciphertext, []byte(associatedData))
+	plaintext, err := e.aead.Open(nil, nonce, ciphertext, []byte(aad))
 	if err != nil {
 		return "", errors.New("decrypt credential: authentication failed")
 	}

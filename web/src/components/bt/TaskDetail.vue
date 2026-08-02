@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { BTFile, BTPeer, BTTask } from './types'
-import { formatBytes, formatRate } from './types'
+import { formatBytes, formatRate, syncStatusLabel, syncStrategyLabel } from './types'
 
 const props = defineProps<{
   task: BTTask
@@ -112,6 +112,14 @@ function sourceLabel(source: string) {
             <span v-if="task.seedingPaused" class="seed-paused">已暂停做种</span>
           </dd>
         </div>
+        <div v-if="task.syncStatus && task.syncStatus !== 'none'">
+          <dt>同步策略</dt>
+          <dd>{{ syncStrategyLabel(task.syncStrategy) }}</dd>
+        </div>
+        <div v-if="task.syncStatus && task.syncStatus !== 'none'">
+          <dt>同步状态</dt>
+          <dd>{{ syncStatusLabel(task.syncStatus) || task.syncStatus }}</dd>
+        </div>
       </dl>
 
       <div class="file-heading">
@@ -171,12 +179,24 @@ function sourceLabel(source: string) {
       <p v-if="!files.length" class="empty-state">元数据尚未就绪。</p>
       <div v-else class="record-table-wrap file-table">
         <table>
-          <thead><tr><th>文件</th><th>大小</th><th>进度</th><th>优先级</th></tr></thead>
+          <thead>
+            <tr>
+              <th>文件</th>
+              <th>大小</th>
+              <th>进度</th>
+              <th>同步</th>
+              <th>优先级</th>
+            </tr>
+          </thead>
           <tbody>
             <tr v-for="file in files" :key="file.id">
               <td class="content-cell">{{ file.path }}</td>
               <td>{{ formatBytes(file.length) }}</td>
               <td>{{ file.length ? ((file.completedBytes / file.length) * 100).toFixed(1) : 100 }}%</td>
+              <td>
+                <span v-if="syncStatusLabel(file.syncStatus)">{{ syncStatusLabel(file.syncStatus) }}</span>
+                <span v-else>—</span>
+              </td>
               <td>
                 <select v-model.number="priorities[file.index]">
                   <option :value="0">不下载</option>

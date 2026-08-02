@@ -8,12 +8,16 @@ const emit = defineEmits<{
     downloadLimitBps: number
     uploadLimitBps: number
     seedRatioLimit: number
+    syncStrategy: string
+    syncConcurrency: number
   }]
 }>()
 
 const downloadLimitKib = ref(0)
 const uploadLimitKib = ref(0)
 const seedRatioLimit = ref(0)
+const syncStrategy = ref('complete')
+const syncConcurrency = ref(2)
 
 watch(
   () => props.settings,
@@ -22,6 +26,8 @@ watch(
     downloadLimitKib.value = Math.round((settings.downloadLimitBps || 0) / 1024)
     uploadLimitKib.value = Math.round((settings.uploadLimitBps || 0) / 1024)
     seedRatioLimit.value = settings.seedRatioLimit || 0
+    syncStrategy.value = settings.syncStrategy || 'complete'
+    syncConcurrency.value = settings.syncConcurrency || 2
   },
   { immediate: true },
 )
@@ -31,6 +37,8 @@ function submit() {
     downloadLimitBps: Math.max(0, Math.round(downloadLimitKib.value)) * 1024,
     uploadLimitBps: Math.max(0, Math.round(uploadLimitKib.value)) * 1024,
     seedRatioLimit: Math.max(0, Number(seedRatioLimit.value) || 0),
+    syncStrategy: syncStrategy.value,
+    syncConcurrency: Math.min(32, Math.max(1, Math.round(syncConcurrency.value) || 1)),
   })
 }
 </script>
@@ -39,7 +47,7 @@ function submit() {
   <section class="panel settings-panel">
     <div class="panel-heading">
       <h2>BT 引擎设置</h2>
-      <p>下载目录与监听端口来自 YAML；速度限制与分享率阈值可在此修改并写回配置。</p>
+      <p>下载目录与监听端口来自 YAML；速度限制、同步策略与并发可在此修改并写回配置。</p>
     </div>
     <dl v-if="settings" class="detail-grid">
       <div><dt>引擎</dt><dd>{{ settings.running ? '运行中' : '未运行' }}</dd></div>
@@ -59,6 +67,17 @@ function submit() {
       <label>
         <span>暂停做种分享率（0 表示关闭，例如 2）</span>
         <input v-model.number="seedRatioLimit" type="number" min="0" step="0.1" />
+      </label>
+      <label>
+        <span>默认同步策略（远程存储）</span>
+        <select v-model="syncStrategy">
+          <option value="complete">全部下载完毕后同步</option>
+          <option value="per_file">逐个同步（完成一个同步一个）</option>
+        </select>
+      </label>
+      <label>
+        <span>同时上传文件数（1–32）</span>
+        <input v-model.number="syncConcurrency" type="number" min="1" max="32" step="1" />
       </label>
       <button type="submit" :disabled="busy">保存设置</button>
     </form>

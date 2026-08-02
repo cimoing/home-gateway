@@ -10,6 +10,7 @@ import (
 	"home-gateway/internal/bt"
 	"home-gateway/internal/credential"
 	"home-gateway/internal/dns"
+	"home-gateway/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
@@ -17,20 +18,29 @@ import (
 
 // New creates the application's HTTP router.
 func New(databases ...*sqlx.DB) *gin.Engine {
-	return newRouter(os.Getenv("WEB_ROOT"), firstDatabase(databases), nil)
+	return newRouter(os.Getenv("WEB_ROOT"), firstDatabase(databases), nil, nil)
 }
 
 // NewWithWebRoot creates the router and optionally serves a built web app.
 func NewWithWebRoot(webRoot string, databases ...*sqlx.DB) *gin.Engine {
-	return newRouter(webRoot, firstDatabase(databases), nil)
+	return newRouter(webRoot, firstDatabase(databases), nil, nil)
 }
 
 // NewWithServices creates the production router with runtime services.
-func NewWithServices(database *sqlx.DB, btService *bt.Service) *gin.Engine {
-	return newRouter(os.Getenv("WEB_ROOT"), database, btService)
+func NewWithServices(
+	database *sqlx.DB,
+	btService *bt.Service,
+	storageService *storage.Service,
+) *gin.Engine {
+	return newRouter(os.Getenv("WEB_ROOT"), database, btService, storageService)
 }
 
-func newRouter(webRoot string, database *sqlx.DB, btService *bt.Service) *gin.Engine {
+func newRouter(
+	webRoot string,
+	database *sqlx.DB,
+	btService *bt.Service,
+	storageService *storage.Service,
+) *gin.Engine {
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery())
 	_ = engine.SetTrustedProxies(nil)
@@ -46,10 +56,16 @@ func newRouter(webRoot string, database *sqlx.DB, btService *bt.Service) *gin.En
 		authHandler.Register(api)
 		protected := api.Group("")
 		protected.Use(authHandler.RequireSession())
+		encryptor := credential.FromEnv()
 		dns.NewHandler(
-			dns.NewService(database, credential.FromEnv()),
+			dns.NewService(database, encryptor),
 		).Register(protected)
+		if storageService == nil {
+			storageService = storage.NewService(database, encryptor)
+		}
+		storage.NewHandler(storageService).Register(protected)
 		if btService != nil {
+			btService.SetStorage(storageService)
 			bt.NewHandler(btService).Register(protected)
 		}
 	}

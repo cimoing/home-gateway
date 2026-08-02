@@ -43,3 +43,21 @@ func TestUnconfiguredEncryptor(t *testing.T) {
 		t.Fatalf("expected ErrNotConfigured, got %v", err)
 	}
 }
+
+func TestEncryptForUsesDistinctAAD(t *testing.T) {
+	encryptor, err := New(bytes.Repeat([]byte{0x42}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, nonce, _, _, err := encryptor.EncryptFor(StorageSecretAAD, "storage-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := encryptor.Decrypt(ciphertext, nonce); err == nil {
+		t.Fatal("expected cloudflare AAD decrypt to fail for storage ciphertext")
+	}
+	secret, err := encryptor.DecryptFor(StorageSecretAAD, ciphertext, nonce)
+	if err != nil || secret != "storage-secret" {
+		t.Fatalf("unexpected storage decrypt: %q %v", secret, err)
+	}
+}

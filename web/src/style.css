@@ -640,6 +640,32 @@ th {
   justify-content: flex-end;
 }
 
+.storage-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 0 0 14px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+button.linkish {
+  padding: 0;
+  border: 0;
+  color: #93c5fd;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.upload-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
 .settings-form {
   display: grid;
   gap: 14px;

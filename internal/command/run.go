@@ -12,7 +12,9 @@ import (
 
 	"home-gateway/internal/bt"
 	appconfig "home-gateway/internal/config"
+	"home-gateway/internal/credential"
 	"home-gateway/internal/router"
+	"home-gateway/internal/storage"
 
 	"github.com/spf13/cobra"
 )
@@ -63,7 +65,11 @@ func runServer(cmd *cobra.Command) error {
 		}
 		engine = anacrolix
 	}
-	btService := bt.NewService(db, engine, config.BT, configPath)
+	storageService := storage.NewService(db, credential.FromEnv())
+	if err := storageService.EnsureDefaultLocalBackend(cmd.Context(), config.BT.DownloadDir); err != nil {
+		return fmt.Errorf("seed default storage backend: %w", err)
+	}
+	btService := bt.NewServiceWithStorage(db, engine, storageService, config.BT, configPath)
 	defer func() {
 		if err := btService.Close(); err != nil {
 			log.Printf("BitTorrent shutdown failed: %v", err)
@@ -80,7 +86,7 @@ func runServer(cmd *cobra.Command) error {
 
 	server := &http.Server{
 		Addr:              address,
-		Handler:           router.NewWithServices(db, btService),
+		Handler:           router.NewWithServices(db, btService, storageService),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

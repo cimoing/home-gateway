@@ -11,9 +11,11 @@ import (
 )
 
 const (
-	DefaultPath        = "/data/config.yaml"
-	DefaultDownloadDir = "/data/downloads"
-	DefaultListenPort  = 42069
+	DefaultPath            = "/data/config.yaml"
+	DefaultDownloadDir     = "/data/downloads"
+	DefaultListenPort      = 42069
+	DefaultSyncStrategy    = "complete"
+	DefaultSyncConcurrency = 2
 )
 
 // Config contains file-backed application settings.
@@ -29,14 +31,18 @@ type BTConfig struct {
 	DownloadLimitBps int64   `yaml:"download_limit_bps" json:"downloadLimitBps"`
 	UploadLimitBps   int64   `yaml:"upload_limit_bps" json:"uploadLimitBps"`
 	SeedRatioLimit   float64 `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
+	SyncStrategy     string  `yaml:"sync_strategy" json:"syncStrategy"`
+	SyncConcurrency  int     `yaml:"sync_concurrency" json:"syncConcurrency"`
 }
 
 // Default returns safe settings when the default config file is absent.
 func Default() Config {
 	return Config{BT: BTConfig{
-		Enabled:     true,
-		DownloadDir: DefaultDownloadDir,
-		ListenPort:  DefaultListenPort,
+		Enabled:         true,
+		DownloadDir:     DefaultDownloadDir,
+		ListenPort:      DefaultListenPort,
+		SyncStrategy:    DefaultSyncStrategy,
+		SyncConcurrency: DefaultSyncConcurrency,
 	}}
 }
 
@@ -91,6 +97,20 @@ func normalize(config Config, configPath string) (Config, error) {
 	}
 	if config.BT.SeedRatioLimit < 0 {
 		return Config{}, errors.New("bt.seed_ratio_limit must be zero or positive")
+	}
+	if strings.TrimSpace(config.BT.SyncStrategy) == "" {
+		config.BT.SyncStrategy = DefaultSyncStrategy
+	}
+	switch config.BT.SyncStrategy {
+	case "complete", "per_file":
+	default:
+		return Config{}, errors.New("bt.sync_strategy must be complete or per_file")
+	}
+	if config.BT.SyncConcurrency == 0 {
+		config.BT.SyncConcurrency = DefaultSyncConcurrency
+	}
+	if config.BT.SyncConcurrency < 1 || config.BT.SyncConcurrency > 32 {
+		return Config{}, errors.New("bt.sync_concurrency must be between 1 and 32")
 	}
 	if !filepath.IsAbs(config.BT.DownloadDir) {
 		base := filepath.Dir(configPath)

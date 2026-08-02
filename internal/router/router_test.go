@@ -105,7 +105,7 @@ func TestBTRoutesRequireSession(t *testing.T) {
 	defer service.Close()
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/bt/settings", nil)
-	NewWithServices(db, service).ServeHTTP(recorder, request)
+	NewWithServices(db, service, nil).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
 	}

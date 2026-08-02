@@ -63,7 +63,7 @@ func (s *Service) Files(ctx context.Context, taskID int64) ([]model.BTTaskFile, 
 	}
 	var files []model.BTTaskFile
 	query := s.db.Rebind(`
-		SELECT id, task_id, file_index, path, length, selected, priority
+		SELECT id, task_id, file_index, path, length, selected, priority, sync_status, sync_error
 		FROM bt_task_files WHERE task_id = ? ORDER BY file_index
 	`)
 	if err := s.db.SelectContext(ctx, &files, query, taskID); err != nil {
@@ -81,6 +81,8 @@ func (s *Service) Files(ctx context.Context, taskID int64) ([]model.BTTaskFile, 
 func (s *Service) enrichTask(ctx context.Context, task model.BTTask) model.BTTask {
 	if relative, err := s.config.RelativeTaskDir(task.SavePath); err == nil {
 		task.SaveSubdir = relative
+	} else if task.StoragePrefix != "" {
+		task.SaveSubdir = task.StoragePrefix
 	}
 	runtime, ok := s.runtimeTask(task.InfoHash)
 	if !ok {
@@ -113,6 +115,11 @@ func (s *Service) enrichTask(ctx context.Context, task model.BTTask) model.BTTas
 		eta := (task.TotalBytes - task.CompletedBytes) / task.DownloadRate
 		task.ETASeconds = &eta
 	}
+	if task.StorageBackendID != nil &&
+		task.SyncStatus != model.BTSyncNone &&
+		task.SyncStrategy == model.BTSyncStrategyPerFile {
+		s.maybeEnqueuePerFileSyncs(ctx, task)
+	}
 	if task.TotalBytes > 0 && task.CompletedBytes >= task.TotalBytes &&
 		task.Status != model.BTStateCompleted {
 		task.Status = model.BTStateCompleted
@@ -124,6 +131,13 @@ func (s *Service) enrichTask(ctx context.Context, task model.BTTask) model.BTTas
 		_, _ = s.db.ExecContext(
 			ctx, query, model.BTStateCompleted, completedAt, completedAt, task.ID,
 		)
+		if task.SyncStatus == model.BTSyncPending || task.SyncStatus == model.BTSyncError {
+			if task.SyncStrategy == model.BTSyncStrategyPerFile {
+				s.maybeEnqueuePerFileSyncs(ctx, task)
+			} else {
+				s.enqueueSync(task.ID)
+			}
+		}
 	}
 	return task
 }

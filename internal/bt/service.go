@@ -5,20 +5,24 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	appconfig "home-gateway/internal/config"
 	"home-gateway/internal/model"
+	"home-gateway/internal/storage"
 
 	"github.com/jmoiron/sqlx"
 )
 
 // AddOptions controls the immutable storage location and initial state.
 type AddOptions struct {
-	Subdirectory string `json:"subdirectory"`
-	Start        bool   `json:"start"`
+	Subdirectory     string `json:"subdirectory"`
+	StorageBackendID int64  `json:"storageBackendId"`
+	SyncStrategy     string `json:"syncStrategy"`
+	Start            bool   `json:"start"`
 }
 
 // Settings is the runtime configuration exposed to the UI.
@@ -30,6 +34,8 @@ type Settings struct {
 	DownloadLimitBps int64   `json:"downloadLimitBps"`
 	UploadLimitBps   int64   `json:"uploadLimitBps"`
 	SeedRatioLimit   float64 `json:"seedRatioLimit"`
+	SyncStrategy     string  `json:"syncStrategy"`
+	SyncConcurrency  int     `json:"syncConcurrency"`
 }
 
 // UpdateSettingsRequest contains mutable BT settings.
@@ -37,6 +43,8 @@ type UpdateSettingsRequest struct {
 	DownloadLimitBps *int64   `json:"downloadLimitBps"`
 	UploadLimitBps   *int64   `json:"uploadLimitBps"`
 	SeedRatioLimit   *float64 `json:"seedRatioLimit"`
+	SyncStrategy     *string  `json:"syncStrategy"`
+	SyncConcurrency  *int     `json:"syncConcurrency"`
 }
 
 // Status is the process-wide BT dashboard snapshot.
@@ -59,16 +67,19 @@ type rateSample struct {
 type Service struct {
 	db         *sqlx.DB
 	engine     Engine
+	storage    *storage.Service
 	config     appconfig.BTConfig
 	configPath string
 	ctx        context.Context
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
-	mu          sync.Mutex
-	samples     map[string]rateSample
-	peerSamples map[string]rateSample
-	global      rateSample
-	seedPaused  map[string]bool
+	mu           sync.Mutex
+	samples      map[string]rateSample
+	peerSamples  map[string]rateSample
+	global       rateSample
+	seedPaused   map[string]bool
+	syncingFiles map[string]bool
+	activeSyncs  int
 }
 
 // NewService creates a BT task service. engine may be nil when disabled.
@@ -78,19 +89,37 @@ func NewService(
 	config appconfig.BTConfig,
 	configPath string,
 ) *Service {
+	return NewServiceWithStorage(db, engine, nil, config, configPath)
+}
+
+// NewServiceWithStorage creates a BT service with optional storage destinations.
+func NewServiceWithStorage(
+	db *sqlx.DB,
+	engine Engine,
+	storageService *storage.Service,
+	config appconfig.BTConfig,
+	configPath string,
+) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
-		db: db, engine: engine, config: config, configPath: configPath,
+		db: db, engine: engine, storage: storageService,
+		config: config, configPath: configPath,
 		ctx: ctx, cancel: cancel,
-		samples:     make(map[string]rateSample),
-		peerSamples: make(map[string]rateSample),
-		seedPaused:  make(map[string]bool),
+		samples:      make(map[string]rateSample),
+		peerSamples:  make(map[string]rateSample),
+		seedPaused:   make(map[string]bool),
+		syncingFiles: make(map[string]bool),
 	}
 	if engine != nil {
 		service.wg.Add(1)
 		go service.watchSeedRatio()
 	}
 	return service
+}
+
+// SetStorage attaches storage management after construction.
+func (s *Service) SetStorage(storageService *storage.Service) {
+	s.storage = storageService
 }
 
 // Settings returns safe runtime configuration.
@@ -105,6 +134,8 @@ func (s *Service) Settings() Settings {
 		DownloadLimitBps: s.config.DownloadLimitBps,
 		UploadLimitBps:   s.config.UploadLimitBps,
 		SeedRatioLimit:   s.config.SeedRatioLimit,
+		SyncStrategy:     s.config.SyncStrategy,
+		SyncConcurrency:  s.config.SyncConcurrency,
 	}
 }
 
@@ -131,6 +162,21 @@ func (s *Service) UpdateSettings(request UpdateSettingsRequest) (Settings, error
 			return Settings{}, fmt.Errorf("%w: seedRatioLimit must be >= 0", ErrInvalidInput)
 		}
 		s.config.SeedRatioLimit = *request.SeedRatioLimit
+	}
+	if request.SyncStrategy != nil {
+		strategy := strings.TrimSpace(strings.ToLower(*request.SyncStrategy))
+		if strategy != model.BTSyncStrategyComplete && strategy != model.BTSyncStrategyPerFile {
+			s.mu.Unlock()
+			return Settings{}, fmt.Errorf("%w: syncStrategy must be complete or per_file", ErrInvalidInput)
+		}
+		s.config.SyncStrategy = strategy
+	}
+	if request.SyncConcurrency != nil {
+		if *request.SyncConcurrency < 1 || *request.SyncConcurrency > 32 {
+			s.mu.Unlock()
+			return Settings{}, fmt.Errorf("%w: syncConcurrency must be between 1 and 32", ErrInvalidInput)
+		}
+		s.config.SyncConcurrency = *request.SyncConcurrency
 	}
 	config := appconfig.Config{BT: s.config}
 	downloadLimit := s.config.DownloadLimitBps
@@ -205,6 +251,13 @@ func (s *Service) Restore(ctx context.Context) error {
 		}
 		runtime.Pause()
 		s.watchMetadata(task.ID, runtime)
+		if task.StorageBackendID != nil && task.SyncStatus != model.BTSyncNone {
+			if task.SyncStrategy == model.BTSyncStrategyPerFile {
+				s.maybeEnqueuePerFileSyncs(ctx, task)
+			} else if task.Status == model.BTStateCompleted && task.SyncStatus == model.BTSyncPending {
+				s.enqueueSync(task.ID)
+			}
+		}
 	}
 	return nil
 }
@@ -222,9 +275,10 @@ func (s *Service) AddMagnet(
 	if !strings.HasPrefix(strings.ToLower(uri), "magnet:?") || len(uri) > 16384 {
 		return model.BTTask{}, fmt.Errorf("%w: invalid magnet URI", ErrInvalidInput)
 	}
-	savePath, err := s.config.ResolveTaskDir(options.Subdirectory)
+	taskKey := strconv.FormatInt(time.Now().UnixNano(), 36)
+	savePath, prefix, backendID, syncStatus, err := s.resolveDestination(ctx, options, taskKey)
 	if err != nil {
-		return model.BTTask{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+		return model.BTTask{}, err
 	}
 	runtime, err := s.engine.AddMagnet(uri, savePath)
 	if err != nil {
@@ -237,6 +291,10 @@ func (s *Service) AddMagnet(
 		uri,
 		nil,
 		savePath,
+		prefix,
+		backendID,
+		syncStatus,
+		s.resolveSyncStrategy(options.SyncStrategy),
 		options.Start,
 	)
 	if err != nil {
@@ -260,9 +318,10 @@ func (s *Service) AddTorrent(
 	if len(data) == 0 || len(data) > 10<<20 {
 		return model.BTTask{}, fmt.Errorf("%w: torrent file must be 1 byte to 10 MiB", ErrInvalidInput)
 	}
-	savePath, err := s.config.ResolveTaskDir(options.Subdirectory)
+	taskKey := strconv.FormatInt(time.Now().UnixNano(), 36)
+	savePath, prefix, backendID, syncStatus, err := s.resolveDestination(ctx, options, taskKey)
 	if err != nil {
-		return model.BTTask{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+		return model.BTTask{}, err
 	}
 	runtime, err := s.engine.AddTorrent(data, savePath)
 	if err != nil {
@@ -275,6 +334,10 @@ func (s *Service) AddTorrent(
 		"",
 		data,
 		savePath,
+		prefix,
+		backendID,
+		syncStatus,
+		s.resolveSyncStrategy(options.SyncStrategy),
 		options.Start,
 	)
 	if err != nil {
@@ -293,11 +356,21 @@ func (s *Service) insertTask(
 	sourceValue string,
 	metainfo []byte,
 	savePath string,
+	storagePrefix string,
+	storageBackendID *int64,
+	syncStatus string,
+	syncStrategy string,
 	start bool,
 ) (model.BTTask, error) {
 	desired := model.BTStatePaused
 	if start {
 		desired = model.BTStateDownloading
+	}
+	if syncStatus == "" {
+		syncStatus = model.BTSyncNone
+	}
+	if syncStrategy == "" {
+		syncStrategy = model.BTSyncStrategyComplete
 	}
 	var count int
 	countQuery := s.db.Rebind(`SELECT COUNT(*) FROM bt_tasks WHERE info_hash = ?`)
@@ -311,11 +384,13 @@ func (s *Service) insertTask(
 	query := s.db.Rebind(`
 		INSERT INTO bt_tasks
 		    (info_hash, source_type, source_value, metainfo, name, save_path,
+		     storage_backend_id, storage_prefix, sync_strategy, sync_status, sync_error,
 		     desired_state, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if _, err := s.db.ExecContext(
 		ctx, query, infoHash, sourceType, sourceValue, metainfo, "", savePath,
+		storageBackendID, storagePrefix, syncStrategy, syncStatus, "",
 		desired, model.BTStateMetadata, now, now,
 	); err != nil {
 		return model.BTTask{}, fmt.Errorf("insert BT task: %w", err)
@@ -349,9 +424,22 @@ func (s *Service) applyMetadata(ctx context.Context, taskID int64, runtime Engin
 	}
 	defer tx.Rollback()
 
+	var taskMeta struct {
+		DesiredState string `db:"desired_state"`
+		SyncStatus   string `db:"sync_status"`
+	}
+	queryMeta := tx.Rebind(`SELECT desired_state, sync_status FROM bt_tasks WHERE id = ?`)
+	if err := tx.GetContext(ctx, &taskMeta, queryMeta, taskID); err != nil {
+		return mapTaskNotFound(err)
+	}
+	fileSyncStatus := model.BTSyncNone
+	if taskMeta.SyncStatus != model.BTSyncNone {
+		fileSyncStatus = model.BTSyncPending
+	}
+
 	var existing []model.BTTaskFile
 	queryFiles := tx.Rebind(`
-		SELECT id, task_id, file_index, path, length, selected, priority
+		SELECT id, task_id, file_index, path, length, selected, priority, sync_status, sync_error
 		FROM bt_task_files WHERE task_id = ?
 	`)
 	if err := tx.SelectContext(ctx, &existing, queryFiles, taskID); err != nil {
@@ -367,11 +455,12 @@ func (s *Service) applyMetadata(ctx context.Context, taskID int64, runtime Engin
 		if !ok {
 			insert := tx.Rebind(`
 				INSERT INTO bt_task_files
-				    (task_id, file_index, path, length, selected, priority)
-				VALUES (?, ?, ?, ?, ?, ?)
+				    (task_id, file_index, path, length, selected, priority, sync_status, sync_error)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			`)
 			if _, err := tx.ExecContext(
 				ctx, insert, taskID, file.Index, file.Path, file.Length, true, 1,
+				fileSyncStatus, "",
 			); err != nil {
 				return fmt.Errorf("insert BT task file: %w", err)
 			}
@@ -384,11 +473,7 @@ func (s *Service) applyMetadata(ctx context.Context, taskID int64, runtime Engin
 			selections = append(selections, FileSelection{Index: file.Index, Priority: priority})
 		}
 	}
-	var desired string
-	queryDesired := tx.Rebind(`SELECT desired_state FROM bt_tasks WHERE id = ?`)
-	if err := tx.GetContext(ctx, &desired, queryDesired, taskID); err != nil {
-		return mapTaskNotFound(err)
-	}
+	desired := taskMeta.DesiredState
 	status := desired
 	update := tx.Rebind(`
 		UPDATE bt_tasks SET name = ?, total_bytes = ?, status = ?,
@@ -531,6 +616,7 @@ func (s *Service) Close() error {
 
 const taskSelect = `
 	SELECT id, info_hash, source_type, source_value, metainfo, name, save_path,
+	       storage_backend_id, storage_prefix, sync_strategy, sync_status, sync_error,
 	       desired_state, status, error_message, total_bytes, completed_at,
 	       created_at, updated_at
 	FROM bt_tasks

@@ -2,10 +2,17 @@
 import { ref } from 'vue'
 import BTManager from './bt/BTManager.vue'
 import DNSManager from './DNSManager.vue'
+import StorageManager from './storage/StorageManager.vue'
 
 defineProps<{ userName: string }>()
 const emit = defineEmits<{ logout: [] }>()
-const module = ref<'dns' | 'bt'>('bt')
+const module = ref<'dns' | 'bt' | 'storage'>('bt')
+
+const titles: Record<'dns' | 'bt' | 'storage', string> = {
+  bt: 'BT 下载',
+  dns: 'DNS 管理',
+  storage: '存储管理',
+}
 </script>
 
 <template>
@@ -13,7 +20,7 @@ const module = ref<'dns' | 'bt'>('bt')
     <header class="dashboard-header">
       <div>
         <p class="eyebrow">HOME GATEWAY</p>
-        <h1>{{ module === 'bt' ? 'BT 下载' : 'DNS 管理' }}</h1>
+        <h1>{{ titles[module] }}</h1>
         <p class="muted">你好，{{ userName }}</p>
       </div>
       <button class="secondary-button header-button" type="button" @click="emit('logout')">
@@ -22,9 +29,11 @@ const module = ref<'dns' | 'bt'>('bt')
     </header>
     <nav class="module-tabs" aria-label="功能导航">
       <button :class="{ active: module === 'bt' }" @click="module = 'bt'">BT 下载</button>
+      <button :class="{ active: module === 'storage' }" @click="module = 'storage'">存储管理</button>
       <button :class="{ active: module === 'dns' }" @click="module = 'dns'">DNS 管理</button>
     </nav>
     <BTManager v-if="module === 'bt'" />
+    <StorageManager v-else-if="module === 'storage'" />
     <DNSManager v-else />
   </section>
 </template>

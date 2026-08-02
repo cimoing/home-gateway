@@ -138,13 +138,33 @@ func (s *Service) UpdateFiles(
 		return nil, fmt.Errorf("begin file selection transaction: %w", err)
 	}
 	defer tx.Rollback()
+	fileSyncStatus := model.BTSyncNone
+	if task.SyncStatus != model.BTSyncNone {
+		fileSyncStatus = model.BTSyncPending
+	}
 	updateQuery := tx.Rebind(`
-		UPDATE bt_task_files SET selected = ?, priority = ?
+		UPDATE bt_task_files
+		SET selected = ?, priority = ?,
+		    sync_status = CASE
+		        WHEN ? = 0 THEN 'none'
+		        WHEN sync_status IN ('synced', 'syncing') THEN sync_status
+		        ELSE ?
+		    END,
+		    sync_error = CASE WHEN ? = 0 THEN '' ELSE sync_error END
 		WHERE task_id = ? AND file_index = ?
 	`)
 	for _, file := range files {
+		selected := 0
+		if file.Selected {
+			selected = 1
+		}
+		status := fileSyncStatus
+		if !file.Selected {
+			status = model.BTSyncNone
+		}
 		if _, err := tx.ExecContext(
-			ctx, updateQuery, file.Selected, file.Priority, taskID, file.FileIndex,
+			ctx, updateQuery,
+			file.Selected, file.Priority, selected, status, selected, taskID, file.FileIndex,
 		); err != nil {
 			return nil, fmt.Errorf("persist BT file selection: %w", err)
 		}

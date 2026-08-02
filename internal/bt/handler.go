@@ -34,6 +34,7 @@ func (h *Handler) Register(api *gin.RouterGroup) {
 	group.GET("/tasks/:taskID/peers", h.peers)
 	group.POST("/tasks/:taskID/pause", h.pause)
 	group.POST("/tasks/:taskID/resume", h.resume)
+	group.POST("/tasks/:taskID/sync", h.syncTask)
 	group.PUT("/tasks/:taskID/files", h.updateFiles)
 	group.DELETE("/tasks/:taskID", h.deleteTask)
 }
@@ -113,17 +114,21 @@ func (h *Handler) peers(c *gin.Context) {
 func (h *Handler) addMagnet(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32*1024)
 	var request struct {
-		URI          string `json:"uri" binding:"required"`
-		Subdirectory string `json:"subdirectory"`
-		Start        bool   `json:"start"`
+		URI              string `json:"uri" binding:"required"`
+		Subdirectory     string `json:"subdirectory"`
+		StorageBackendID int64  `json:"storageBackendId"`
+		SyncStrategy     string `json:"syncStrategy"`
+		Start            bool   `json:"start"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid magnet request"})
 		return
 	}
 	task, err := h.service.AddMagnet(c.Request.Context(), request.URI, AddOptions{
-		Subdirectory: request.Subdirectory,
-		Start:        request.Start,
+		Subdirectory:     request.Subdirectory,
+		StorageBackendID: request.StorageBackendID,
+		SyncStrategy:     request.SyncStrategy,
+		Start:            request.Start,
 	})
 	if err != nil {
 		writeBTError(c, err)
@@ -154,9 +159,12 @@ func (h *Handler) addTorrent(c *gin.Context) {
 		return
 	}
 	start, _ := strconv.ParseBool(c.PostForm("start"))
+	storageBackendID, _ := strconv.ParseInt(c.PostForm("storageBackendId"), 10, 64)
 	task, err := h.service.AddTorrent(c.Request.Context(), data, AddOptions{
-		Subdirectory: c.PostForm("subdirectory"),
-		Start:        start,
+		Subdirectory:     c.PostForm("subdirectory"),
+		StorageBackendID: storageBackendID,
+		SyncStrategy:     c.PostForm("syncStrategy"),
+		Start:            start,
 	})
 	if err != nil {
 		writeBTError(c, err)
@@ -184,6 +192,10 @@ func (h *Handler) pause(c *gin.Context) {
 
 func (h *Handler) resume(c *gin.Context) {
 	h.control(c, h.service.Resume)
+}
+
+func (h *Handler) syncTask(c *gin.Context) {
+	h.control(c, h.service.SyncTask)
 }
 
 func (h *Handler) control(
