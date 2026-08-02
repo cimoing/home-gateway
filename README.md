@@ -16,6 +16,20 @@ internal/router/  Gin 路由
 web/              Vue 前端
 ```
 
+## 本地编译
+
+需要本机已安装 Go、Node.js / npm，以及 `make`：
+
+```powershell
+make          # 构建前端 + 服务端，输出 bin/home-gateway
+make server   # 仅编译 Go
+make web      # 仅构建 Vue
+make test     # Go 测试 + 前端构建
+make run      # 编译并启动（WEB_ROOT=web/dist）
+make clean    # 清理 bin/ 与 web/dist/
+make help     # 查看全部目标
+```
+
 ## 开发
 
 构建开发镜像：
