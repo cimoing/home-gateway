@@ -3,12 +3,15 @@ CMD      := ./cmd/server
 BIN_DIR  := bin
 WEB_DIR  := web
 DIST_DIR := $(WEB_DIR)/dist
+RELEASE_DIR := dist
 
 GO           ?= go
 NPM          ?= npm
 CGO_ENABLED  ?= 0
 DOCKER       ?= docker
 IMAGE        ?= $(APP):local
+GOOS         ?= $(shell $(GO) env GOOS)
+GOARCH       ?= $(shell $(GO) env GOARCH)
 
 ifeq ($(OS),Windows_NT)
 EXE := .exe
@@ -18,7 +21,7 @@ endif
 
 BINARY := $(BIN_DIR)/$(APP)$(EXE)
 
-.PHONY: all build server web web-deps test clean run docker help
+.PHONY: all build server web web-deps test clean run docker release release-amd64 release-arm64 package help
 
 ## build web assets and the Go server (default)
 all: build
@@ -50,7 +53,7 @@ test:
 ## remove build outputs
 clean:
 	$(GO) clean
-	rm -rf $(BIN_DIR) $(DIST_DIR)
+	rm -rf $(BIN_DIR) $(DIST_DIR) $(RELEASE_DIR)
 
 ## build and run the local binary (serves web/dist)
 run: build
@@ -59,6 +62,30 @@ run: build
 ## build the production Docker image
 docker:
 	$(DOCKER) build -t $(IMAGE) .
+
+## build linux/amd64 and linux/arm64 release archives
+release: web release-amd64 release-arm64
+
+release-amd64:
+	@$(MAKE) package GOOS=linux GOARCH=amd64
+
+release-arm64:
+	@$(MAKE) package GOOS=linux GOARCH=arm64
+
+package: $(BIN_DIR)
+	@set -e; \
+	name="$(APP)-$(GOOS)-$(GOARCH)"; \
+	outdir="$(RELEASE_DIR)/$${name}"; \
+	mkdir -p "$${outdir}/web"; \
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build \
+		-trimpath \
+		-ldflags="-s -w" \
+		-o "$${outdir}/$(APP)" \
+		$(CMD); \
+	cp -a $(DIST_DIR)/. "$${outdir}/web/"; \
+	cp config.example.yaml "$${outdir}/"; \
+	tar -C $(RELEASE_DIR) -czf "$(RELEASE_DIR)/$${name}.tar.gz" "$${name}"; \
+	echo "built $(RELEASE_DIR)/$${name}.tar.gz"
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -71,4 +98,5 @@ help:
 	@echo "  make test           Run Go tests and frontend build"
 	@echo "  make run            Build and start the server"
 	@echo "  make docker         Build Docker image $(IMAGE)"
-	@echo "  make clean          Remove bin/ and web/dist/"
+	@echo "  make release        Build linux/amd64 + linux/arm64 archives"
+	@echo "  make clean          Remove bin/, web/dist/, and dist/"

@@ -11,7 +11,10 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.25-bookworm AS server-builder
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS server-builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH
 
 WORKDIR /src
 
@@ -23,7 +26,7 @@ COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
       -trimpath \
       -ldflags="-s -w" \
       -o /out/home-gateway \

@@ -1,0 +1,134 @@
+name: Build
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.25.7"
+  NODE_VERSION: "24"
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Go tests
+        run: go test ./... -count=1
+
+      - name: Build web
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            goos: linux
+            goarch: amd64
+          - name: linux-arm64
+            goos: linux
+            goarch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web assets
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+
+      - name: Build server
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist/${{ matrix.name }}
+          go build -trimpath -ldflags="-s -w" \
+            -o "dist/${{ matrix.name }}/home-gateway" \
+            ./cmd/server
+
+      - name: Package release archive
+        run: |
+          set -euo pipefail
+          name="home-gateway-${{ matrix.name }}"
+          staging="dist/${name}"
+          mkdir -p "${staging}/web"
+          cp "dist/${{ matrix.name }}/home-gateway" "${staging}/"
+          cp -a web/dist/. "${staging}/web/"
+          cp config.example.yaml "${staging}/"
+          cat > "${staging}/README.txt" <<'EOF'
+          Home Gateway release package
+
+          Run:
+            export WEB_ROOT=./web
+            export DATA=./data
+            ./home-gateway run
+
+          Config defaults to /config/config.yaml; for local use:
+            ./home-gateway run --config ./config.yaml
+          EOF
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: home-gateway-${{ matrix.name }}
+          path: dist/home-gateway-${{ matrix.name }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: home-gateway-*
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.tar.gz
+          generate_release_notes: true
+          fail_on_unmatched_files: true
