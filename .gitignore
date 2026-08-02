@@ -10,6 +10,11 @@ web/node_modules/
 web/dist/
 web/.vite/
 
+# Generated embed payload (placeholder files remain tracked)
+/internal/webui/dist/**
+!/internal/webui/dist/.gitkeep
+!/internal/webui/dist/index.html
+
 # Local configuration and runtime data (Docker Compose defaults)
 .env
 .env.*

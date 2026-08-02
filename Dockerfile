@@ -24,6 +24,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
+COPY --from=web-builder /src/web/dist ./internal/webui/dist
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
@@ -39,14 +40,12 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 
 COPY --from=server-builder --chown=nonroot:nonroot /out/home-gateway ./home-gateway
-COPY --from=web-builder --chown=nonroot:nonroot /src/web/dist ./web
 COPY --from=server-builder --chown=nonroot:nonroot /out/config /config
 COPY --from=server-builder --chown=nonroot:nonroot /out/data /data
 COPY --chown=nonroot:nonroot config.example.yaml /config/config.yaml
 
 ENV GIN_MODE=release \
     SERVER_ADDR=:8080 \
-    WEB_ROOT=/app/web \
     DATA=/data \
     DB_DRIVER=sqlite
 

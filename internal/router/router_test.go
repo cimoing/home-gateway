@@ -55,6 +55,22 @@ func TestServesWebAppAndSPAFallback(t *testing.T) {
 	}
 }
 
+func TestServesEmbeddedWebApp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("WEB_ROOT", "")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	New().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if body := recorder.Body.String(); body == "" {
+		t.Fatal("expected embedded index.html body")
+	}
+}
+
 func TestUnknownAPIRouteDoesNotServeWebApp(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

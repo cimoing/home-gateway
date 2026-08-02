@@ -21,26 +21,30 @@ web/              Vue 前端
 需要本机已安装 Go、Node.js / npm，以及 `make`：
 
 ```powershell
-make          # 构建前端 + 服务端，输出 bin/home-gateway
-make server   # 仅编译 Go
+make          # 构建前端、嵌入资源并编译服务端 -> bin/home-gateway
+make server   # 仅编译 Go（使用当前已嵌入的前端）
 make web      # 仅构建 Vue
+make embed-web # 将 web/dist 复制到 internal/webui/dist 供 go:embed
 make test     # Go 测试 + 前端构建
-make run      # 编译并启动（WEB_ROOT=web/dist）
+make run      # 编译并启动（前端已嵌入二进制）
 make release  # 交叉编译 linux/amd64 + linux/arm64 发布包
 make clean    # 清理 bin/、web/dist/ 与 dist/
 make help     # 查看全部目标
 ```
 
+前端构建产物通过 `go:embed` 打入二进制，发布包为单文件可执行程序（另附示例配置）。
 本地交叉编译产物位于 `dist/home-gateway-linux-amd64.zip` 与
 `dist/home-gateway-linux-arm64.zip`。
+
+开发时仍可通过 `WEB_ROOT` 覆盖，从磁盘目录提供前端静态文件。
 
 ## GitHub Actions
 
 推送 `v*` 标签（如 `v1.0.0`）时，Actions 会自动：
 
 1. 运行 Go 测试并构建前端
-2. 交叉编译 **linux/amd64（x64）** 与 **linux/arm64（树莓派 64 位）**
-3. 打包为包含二进制、`web/` 静态资源与示例配置的 `.zip` 产物
+2. 将前端嵌入后交叉编译 **linux/amd64（x64）** 与 **linux/arm64（树莓派 64 位）**
+3. 打包为包含单二进制与示例配置的 `.zip` 产物
 4. 创建 GitHub Release 并上传两个架构的压缩包
 
 树莓派 4/5 及启用 64 位系统的树莓派 3 请使用 `home-gateway-linux-arm64.zip`。

@@ -69,10 +69,13 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Build web assets
+      - name: Build and embed web assets
         run: |
           npm --prefix web ci
           npm --prefix web run build
+          rm -rf internal/webui/dist
+          mkdir -p internal/webui/dist
+          cp -a web/dist/. internal/webui/dist/
 
       - name: Build server
         env:
@@ -80,9 +83,9 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          mkdir -p dist/${{ matrix.name }}
+          mkdir -p "dist/home-gateway-${{ matrix.name }}"
           go build -trimpath -ldflags="-s -w" \
-            -o "dist/${{ matrix.name }}/home-gateway" \
+            -o "dist/home-gateway-${{ matrix.name }}/home-gateway" \
             ./cmd/server
 
       - name: Package release archive
@@ -90,15 +93,13 @@ jobs:
           set -euo pipefail
           name="home-gateway-${{ matrix.name }}"
           staging="dist/${name}"
-          mkdir -p "${staging}/web"
-          cp "dist/${{ matrix.name }}/home-gateway" "${staging}/"
-          cp -a web/dist/. "${staging}/web/"
           cp config.example.yaml "${staging}/"
           cat > "${staging}/README.txt" <<'EOF'
           Home Gateway release package
 
+          The web UI is embedded in the binary.
+
           Run:
-            export WEB_ROOT=./web
             export DATA=./data
             ./home-gateway run
 
