@@ -55,13 +55,15 @@ func runServer(cmd *cobra.Command) error {
 		anacrolix, err := bt.NewAnacrolixEngine(
 			config.BT.DownloadDir,
 			config.BT.ListenPort,
+			config.BT.DownloadLimitBps,
+			config.BT.UploadLimitBps,
 		)
 		if err != nil {
 			return err
 		}
 		engine = anacrolix
 	}
-	btService := bt.NewService(db, engine, config.BT)
+	btService := bt.NewService(db, engine, config.BT, configPath)
 	defer func() {
 		if err := btService.Close(); err != nil {
 			log.Printf("BitTorrent shutdown failed: %v", err)

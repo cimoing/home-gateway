@@ -14,6 +14,7 @@ export interface BTTask {
   uploadedBytes: number
   peers: number
   ratio: number
+  seedingPaused?: boolean
   etaSeconds?: number
   createdAt: string
 }
@@ -29,11 +30,34 @@ export interface BTFile {
   completedBytes: number
 }
 
+export interface BTPeer {
+  address: string
+  peerId: string
+  network: string
+  source: string
+  downloadedBytes: number
+  uploadedBytes: number
+  downloadRate: number
+  uploadRate: number
+}
+
 export interface BTSettings {
   enabled: boolean
   downloadRoot: string
   listenPort: number
   running: boolean
+  downloadLimitBps: number
+  uploadLimitBps: number
+  seedRatioLimit: number
+}
+
+export interface BTStatus {
+  dhtNodes: number
+  dhtGoodNodes: number
+  downloadRate: number
+  uploadRate: number
+  downloadedBytes: number
+  uploadedBytes: number
 }
 
 export function formatBytes(value: number) {
@@ -41,6 +65,10 @@ export function formatBytes(value: number) {
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
   const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
   return `${(value / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`
+}
+
+export function formatRate(value: number) {
+  return `${formatBytes(value)}/s`
 }
 
 export function formatDuration(seconds?: number) {

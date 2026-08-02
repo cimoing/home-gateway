@@ -101,7 +101,7 @@ func TestBTRoutesRequireSession(t *testing.T) {
 	if err := database.Migrate(context.Background(), db, database.DriverSQLite); err != nil {
 		t.Fatal(err)
 	}
-	service := bt.NewService(db, nil, appconfig.Default().BT)
+	service := bt.NewService(db, nil, appconfig.Default().BT, "")
 	defer service.Close()
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/bt/settings", nil)

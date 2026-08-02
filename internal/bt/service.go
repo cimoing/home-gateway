@@ -21,12 +21,32 @@ type AddOptions struct {
 	Start        bool   `json:"start"`
 }
 
-// Settings is the safe, read-only runtime configuration.
+// Settings is the runtime configuration exposed to the UI.
 type Settings struct {
-	Enabled      bool   `json:"enabled"`
-	DownloadRoot string `json:"downloadRoot"`
-	ListenPort   int    `json:"listenPort"`
-	Running      bool   `json:"running"`
+	Enabled          bool    `json:"enabled"`
+	DownloadRoot     string  `json:"downloadRoot"`
+	ListenPort       int     `json:"listenPort"`
+	Running          bool    `json:"running"`
+	DownloadLimitBps int64   `json:"downloadLimitBps"`
+	UploadLimitBps   int64   `json:"uploadLimitBps"`
+	SeedRatioLimit   float64 `json:"seedRatioLimit"`
+}
+
+// UpdateSettingsRequest contains mutable BT settings.
+type UpdateSettingsRequest struct {
+	DownloadLimitBps *int64   `json:"downloadLimitBps"`
+	UploadLimitBps   *int64   `json:"uploadLimitBps"`
+	SeedRatioLimit   *float64 `json:"seedRatioLimit"`
+}
+
+// Status is the process-wide BT dashboard snapshot.
+type Status struct {
+	DHTNodes        int   `json:"dhtNodes"`
+	DHTGoodNodes    int   `json:"dhtGoodNodes"`
+	DownloadRate    int64 `json:"downloadRate"`
+	UploadRate      int64 `json:"uploadRate"`
+	DownloadedBytes int64 `json:"downloadedBytes"`
+	UploadedBytes   int64 `json:"uploadedBytes"`
 }
 
 type rateSample struct {
@@ -37,33 +57,124 @@ type rateSample struct {
 
 // Service persists task intent and coordinates the runtime engine.
 type Service struct {
-	db      *sqlx.DB
-	engine  Engine
-	config  appconfig.BTConfig
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	mu      sync.Mutex
-	samples map[string]rateSample
+	db         *sqlx.DB
+	engine     Engine
+	config     appconfig.BTConfig
+	configPath string
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	mu         sync.Mutex
+	samples    map[string]rateSample
+	global     rateSample
+	seedPaused map[string]bool
 }
 
 // NewService creates a BT task service. engine may be nil when disabled.
-func NewService(db *sqlx.DB, engine Engine, config appconfig.BTConfig) *Service {
+func NewService(
+	db *sqlx.DB,
+	engine Engine,
+	config appconfig.BTConfig,
+	configPath string,
+) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Service{
-		db: db, engine: engine, config: config, ctx: ctx, cancel: cancel,
-		samples: make(map[string]rateSample),
+	service := &Service{
+		db: db, engine: engine, config: config, configPath: configPath,
+		ctx: ctx, cancel: cancel,
+		samples:    make(map[string]rateSample),
+		seedPaused: make(map[string]bool),
 	}
+	if engine != nil {
+		service.wg.Add(1)
+		go service.watchSeedRatio()
+	}
+	return service
 }
 
 // Settings returns safe runtime configuration.
 func (s *Service) Settings() Settings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return Settings{
-		Enabled:      s.config.Enabled,
-		DownloadRoot: s.config.DownloadDir,
-		ListenPort:   s.config.ListenPort,
-		Running:      s.engine != nil,
+		Enabled:          s.config.Enabled,
+		DownloadRoot:     s.config.DownloadDir,
+		ListenPort:       s.config.ListenPort,
+		Running:          s.engine != nil,
+		DownloadLimitBps: s.config.DownloadLimitBps,
+		UploadLimitBps:   s.config.UploadLimitBps,
+		SeedRatioLimit:   s.config.SeedRatioLimit,
 	}
+}
+
+// UpdateSettings persists mutable limits and applies them to the engine.
+func (s *Service) UpdateSettings(request UpdateSettingsRequest) (Settings, error) {
+	s.mu.Lock()
+	if request.DownloadLimitBps != nil {
+		if *request.DownloadLimitBps < 0 {
+			s.mu.Unlock()
+			return Settings{}, fmt.Errorf("%w: downloadLimitBps must be >= 0", ErrInvalidInput)
+		}
+		s.config.DownloadLimitBps = *request.DownloadLimitBps
+	}
+	if request.UploadLimitBps != nil {
+		if *request.UploadLimitBps < 0 {
+			s.mu.Unlock()
+			return Settings{}, fmt.Errorf("%w: uploadLimitBps must be >= 0", ErrInvalidInput)
+		}
+		s.config.UploadLimitBps = *request.UploadLimitBps
+	}
+	if request.SeedRatioLimit != nil {
+		if *request.SeedRatioLimit < 0 {
+			s.mu.Unlock()
+			return Settings{}, fmt.Errorf("%w: seedRatioLimit must be >= 0", ErrInvalidInput)
+		}
+		s.config.SeedRatioLimit = *request.SeedRatioLimit
+	}
+	config := appconfig.Config{BT: s.config}
+	downloadLimit := s.config.DownloadLimitBps
+	uploadLimit := s.config.UploadLimitBps
+	configPath := s.configPath
+	engine := s.engine
+	s.mu.Unlock()
+
+	if configPath != "" {
+		if err := appconfig.Save(configPath, config); err != nil {
+			return Settings{}, fmt.Errorf("persist BT settings: %w", err)
+		}
+	}
+	if engine != nil {
+		engine.SetRateLimits(downloadLimit, uploadLimit)
+	}
+	return s.Settings(), nil
+}
+
+// Status returns DHT size and global transfer rates.
+func (s *Service) Status() Status {
+	if s.engine == nil {
+		return Status{}
+	}
+	stats := s.engine.Stats()
+	status := Status{
+		DHTNodes:        stats.DHTNodes,
+		DHTGoodNodes:    stats.DHTGoodNodes,
+		DownloadedBytes: stats.DownloadedBytes,
+		UploadedBytes:   stats.UploadedBytes,
+	}
+	now := time.Now()
+	s.mu.Lock()
+	previous := s.global
+	s.global = rateSample{
+		at: now, downloaded: stats.DownloadedBytes, uploaded: stats.UploadedBytes,
+	}
+	s.mu.Unlock()
+	if !previous.at.IsZero() {
+		seconds := now.Sub(previous.at).Seconds()
+		if seconds > 0 {
+			status.DownloadRate = max(0, int64(float64(stats.DownloadedBytes-previous.downloaded)/seconds))
+			status.UploadRate = max(0, int64(float64(stats.UploadedBytes-previous.uploaded)/seconds))
+		}
+	}
+	return status
 }
 
 // Restore recreates runtime tasks from persisted sources.
@@ -308,6 +419,102 @@ func (s *Service) setTaskError(ctx context.Context, taskID int64, taskErr error)
 	_, _ = s.db.ExecContext(
 		ctx, query, model.BTStateError, message, time.Now().UTC(), taskID,
 	)
+}
+
+func (s *Service) watchSeedRatio() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.enforceSeedRatio()
+		}
+	}
+}
+
+func (s *Service) enforceSeedRatio() {
+	if s.engine == nil {
+		return
+	}
+	s.mu.Lock()
+	limit := s.config.SeedRatioLimit
+	s.mu.Unlock()
+	if limit <= 0 {
+		s.clearSeedPauses()
+		return
+	}
+	var tasks []model.BTTask
+	if err := s.db.SelectContext(s.ctx, &tasks, taskSelect); err != nil {
+		return
+	}
+	for _, task := range tasks {
+		if task.DesiredState == model.BTStatePaused {
+			continue
+		}
+		runtime, ok := s.runtimeTask(task.InfoHash)
+		if !ok {
+			continue
+		}
+		stats := runtime.Stats()
+		if task.TotalBytes <= 0 || stats.CompletedBytes < task.TotalBytes {
+			continue
+		}
+		ratio := shareRatio(stats.UploadedBytes, stats.DownloadedBytes, task.TotalBytes)
+		if ratio < limit {
+			s.mu.Lock()
+			wasPaused := s.seedPaused[task.InfoHash]
+			if wasPaused {
+				delete(s.seedPaused, task.InfoHash)
+			}
+			s.mu.Unlock()
+			if wasPaused {
+				runtime.ResumeUpload()
+			}
+			continue
+		}
+		runtime.PauseUpload()
+		s.mu.Lock()
+		s.seedPaused[task.InfoHash] = true
+		s.mu.Unlock()
+	}
+}
+
+func (s *Service) clearSeedPauses() {
+	s.mu.Lock()
+	hashes := make([]string, 0, len(s.seedPaused))
+	for hash := range s.seedPaused {
+		hashes = append(hashes, hash)
+	}
+	s.seedPaused = make(map[string]bool)
+	s.mu.Unlock()
+	for _, hash := range hashes {
+		runtime, ok := s.runtimeTask(hash)
+		if !ok {
+			continue
+		}
+		var desired string
+		query := s.db.Rebind(`SELECT desired_state FROM bt_tasks WHERE info_hash = ?`)
+		if err := s.db.GetContext(s.ctx, &desired, query, hash); err != nil {
+			continue
+		}
+		if desired != model.BTStatePaused {
+			runtime.ResumeUpload()
+		}
+	}
+}
+
+func shareRatio(uploaded, downloaded, totalBytes int64) float64 {
+	base := downloaded
+	if base <= 0 {
+		base = totalBytes
+	}
+	if base <= 0 {
+		return 0
+	}
+	return float64(uploaded) / float64(base)
 }
 
 // Close stops background work and the embedded engine.

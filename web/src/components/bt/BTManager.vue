@@ -5,14 +5,17 @@ import AddTorrentForm from './AddTorrentForm.vue'
 import BTSettingsView from './BTSettings.vue'
 import TaskDetail from './TaskDetail.vue'
 import TaskList from './TaskList.vue'
-import type { BTFile, BTSettings, BTTask } from './types'
+import type { BTFile, BTPeer, BTSettings, BTStatus, BTTask } from './types'
+import { formatRate } from './types'
 
 type Tab = 'tasks' | 'add' | 'settings'
 const activeTab = ref<Tab>('tasks')
 const tasks = ref<BTTask[]>([])
 const settings = ref<BTSettings | null>(null)
+const status = ref<BTStatus | null>(null)
 const selectedTask = ref<BTTask | null>(null)
 const selectedFiles = ref<BTFile[]>([])
+const selectedPeers = ref<BTPeer[]>([])
 const busy = ref(false)
 const loading = ref(true)
 const error = ref('')
@@ -22,10 +25,13 @@ const search = ref('')
 let timer: number | undefined
 
 onMounted(async () => {
-  await Promise.all([loadTasks(), loadSettings()])
+  await Promise.all([loadTasks(), loadSettings(), loadStatus()])
   loading.value = false
   timer = window.setInterval(() => {
-    if (!document.hidden) void loadTasks(false)
+    if (document.hidden) return
+    void loadTasks(false)
+    void loadStatus()
+    if (selectedTask.value) void refreshSelected(false)
   }, 2000)
 })
 
@@ -72,18 +78,40 @@ async function loadSettings() {
   }
 }
 
+async function loadStatus() {
+  try {
+    const data = await api<{ status: BTStatus }>('/api/bt/status')
+    status.value = data.status
+  } catch {
+    // Keep the last known status when a background poll fails.
+  }
+}
+
 async function selectTask(task: BTTask) {
   await run(async () => {
-    const data = await api<{ task: BTTask; files: BTFile[] }>(`/api/bt/tasks/${task.id}`)
+    await refreshSelected(true, task.id)
+  })
+}
+
+async function refreshSelected(showError = true, taskId = selectedTask.value?.id) {
+  if (!taskId) return
+  try {
+    const data = await api<{ task: BTTask; files: BTFile[]; peers: BTPeer[] }>(
+      `/api/bt/tasks/${taskId}`,
+    )
     selectedTask.value = data.task
     selectedFiles.value = data.files || []
-  })
+    selectedPeers.value = data.peers || []
+  } catch (reason) {
+    if (showError) error.value = reason instanceof Error ? reason.message : '加载任务详情失败'
+  }
 }
 
 async function control(task: BTTask, action: 'pause' | 'resume') {
   await run(async () => {
     await api(`/api/bt/tasks/${task.id}/${action}`, { method: 'POST' })
     await loadTasks()
+    if (selectedTask.value?.id === task.id) await refreshSelected(false)
   }, action === 'pause' ? '任务已暂停。' : '任务已恢复。')
 }
 
@@ -92,7 +120,10 @@ async function removeTask(task: BTTask) {
   const deleteData = confirm('是否同时删除已下载的数据？取消将保留文件。')
   await run(async () => {
     await api(`/api/bt/tasks/${task.id}?deleteData=${deleteData}`, { method: 'DELETE' })
-    if (selectedTask.value?.id === task.id) selectedTask.value = null
+    if (selectedTask.value?.id === task.id) {
+      selectedTask.value = null
+      selectedPeers.value = []
+    }
     await loadTasks()
   }, deleteData ? '任务及下载数据已删除。' : '任务已删除，下载数据已保留。')
 }
@@ -106,6 +137,20 @@ async function saveFiles(files: Array<{ index: number; priority: number }>) {
     )
     selectedFiles.value = data.files
   }, '文件选择已保存。')
+}
+
+async function saveSettings(payload: {
+  downloadLimitBps: number
+  uploadLimitBps: number
+  seedRatioLimit: number
+}) {
+  await run(async () => {
+    const data = await api<{ settings: BTSettings }>('/api/bt/settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    })
+    settings.value = data.settings
+  }, 'BT 设置已保存。')
 }
 
 function taskAdded(task: BTTask) {
@@ -158,15 +203,27 @@ function taskAdded(task: BTTask) {
       />
     </template>
     <AddTorrentForm v-else-if="activeTab === 'add'" @added="taskAdded" />
-    <BTSettingsView v-else :settings="settings" />
+    <BTSettingsView
+      v-else
+      :settings="settings"
+      :busy="busy"
+      @save="saveSettings"
+    />
 
     <TaskDetail
       v-if="selectedTask"
       :task="selectedTask"
       :files="selectedFiles"
+      :peers="selectedPeers"
       :busy="busy"
-      @close="selectedTask = null"
+      @close="selectedTask = null; selectedPeers = []"
       @save-files="saveFiles"
     />
+
+    <aside class="bt-status-bar" aria-live="polite">
+      <span>DHT {{ status?.dhtGoodNodes ?? 0 }}/{{ status?.dhtNodes ?? 0 }}</span>
+      <span>↓ {{ formatRate(status?.downloadRate ?? 0) }}</span>
+      <span>↑ {{ formatRate(status?.uploadRate ?? 0) }}</span>
+    </aside>
   </section>
 </template>

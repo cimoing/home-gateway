@@ -30,6 +30,7 @@ type BTTask struct {
 	UploadedBytes  int64      `db:"-" json:"uploadedBytes"`
 	Peers          int        `db:"-" json:"peers"`
 	Ratio          float64    `db:"-" json:"ratio"`
+	SeedingPaused  bool       `db:"-" json:"seedingPaused"`
 	ETASeconds     *int64     `db:"-" json:"etaSeconds,omitempty"`
 	CompletedAt    *time.Time `db:"completed_at" json:"completedAt,omitempty"`
 	CreatedAt      time.Time  `db:"created_at" json:"createdAt"`

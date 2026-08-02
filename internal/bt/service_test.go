@@ -71,26 +71,38 @@ func (e *fakeEngine) Remove(hash string) error {
 	return nil
 }
 
+func (e *fakeEngine) Stats() EngineStats         { return EngineStats{} }
+func (e *fakeEngine) SetRateLimits(int64, int64) {}
 func (e *fakeEngine) Close() error {
 	e.closed = true
 	return nil
 }
 
 type fakeEngineTask struct {
-	hash       string
-	ready      chan struct{}
-	metadata   TaskMetadata
-	stats      TaskStats
-	paused     bool
-	selections []FileSelection
+	hash         string
+	ready        chan struct{}
+	metadata     TaskMetadata
+	stats        TaskStats
+	paused       bool
+	uploadPaused bool
+	selections   []FileSelection
 }
 
 func (t *fakeEngineTask) InfoHash() string               { return t.hash }
 func (t *fakeEngineTask) MetadataReady() <-chan struct{} { return t.ready }
 func (t *fakeEngineTask) Metadata() TaskMetadata         { return t.metadata }
 func (t *fakeEngineTask) Stats() TaskStats               { return t.stats }
-func (t *fakeEngineTask) Pause()                         { t.paused = true }
-func (t *fakeEngineTask) Resume()                        { t.paused = false }
+func (t *fakeEngineTask) Peers() []PeerInfo              { return nil }
+func (t *fakeEngineTask) Pause() {
+	t.paused = true
+	t.uploadPaused = true
+}
+func (t *fakeEngineTask) Resume() {
+	t.paused = false
+	t.uploadPaused = false
+}
+func (t *fakeEngineTask) PauseUpload()  { t.uploadPaused = true }
+func (t *fakeEngineTask) ResumeUpload() { t.uploadPaused = false }
 func (t *fakeEngineTask) SetFiles(files []FileSelection) error {
 	t.selections = append([]FileSelection(nil), files...)
 	return nil
@@ -117,7 +129,7 @@ func TestServiceTaskLifecycleAndSafeDataDelete(t *testing.T) {
 	engine := newFakeEngine()
 	service := NewService(db, engine, appconfig.BTConfig{
 		Enabled: true, DownloadDir: root, ListenPort: 42069,
-	})
+	}, "")
 	defer service.Close()
 
 	task, err := service.AddMagnet(ctx, "magnet:?xt=urn:btih:abc", AddOptions{

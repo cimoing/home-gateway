@@ -2,3 +2,8 @@ bt:
   enabled: true
   download_dir: /data/downloads
   listen_port: 42069
+  # 0 = unlimited (bytes per second)
+  download_limit_bps: 0
+  upload_limit_bps: 0
+  # 0 = disabled; pause seeding when share ratio reaches this value
+  seed_ratio_limit: 0

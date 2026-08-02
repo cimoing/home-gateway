@@ -59,7 +59,23 @@ func (s *Service) Resume(ctx context.Context, id int64) (model.BTTask, error) {
 	); err != nil {
 		return model.BTTask{}, fmt.Errorf("persist resumed BT state: %w", err)
 	}
+	s.mu.Lock()
+	delete(s.seedPaused, task.InfoHash)
+	limit := s.config.SeedRatioLimit
+	s.mu.Unlock()
 	runtime.Resume()
+	if limit > 0 {
+		stats := runtime.Stats()
+		if task.TotalBytes > 0 && stats.CompletedBytes >= task.TotalBytes {
+			ratio := shareRatio(stats.UploadedBytes, stats.DownloadedBytes, task.TotalBytes)
+			if ratio >= limit {
+				runtime.PauseUpload()
+				s.mu.Lock()
+				s.seedPaused[task.InfoHash] = true
+				s.mu.Unlock()
+			}
+		}
+	}
 	return s.GetTask(ctx, id)
 }
 
@@ -169,6 +185,7 @@ func (s *Service) Delete(ctx context.Context, id int64, deleteData bool) error {
 	}
 	s.mu.Lock()
 	delete(s.samples, task.InfoHash)
+	delete(s.seedPaused, task.InfoHash)
 	s.mu.Unlock()
 	return nil
 }

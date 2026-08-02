@@ -23,9 +23,12 @@ type Config struct {
 
 // BTConfig controls the embedded BitTorrent client.
 type BTConfig struct {
-	Enabled     bool   `yaml:"enabled" json:"enabled"`
-	DownloadDir string `yaml:"download_dir" json:"downloadDir"`
-	ListenPort  int    `yaml:"listen_port" json:"listenPort"`
+	Enabled          bool    `yaml:"enabled" json:"enabled"`
+	DownloadDir      string  `yaml:"download_dir" json:"downloadDir"`
+	ListenPort       int     `yaml:"listen_port" json:"listenPort"`
+	DownloadLimitBps int64   `yaml:"download_limit_bps" json:"downloadLimitBps"`
+	UploadLimitBps   int64   `yaml:"upload_limit_bps" json:"uploadLimitBps"`
+	SeedRatioLimit   float64 `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
 }
 
 // Default returns safe settings when the default config file is absent.
@@ -53,6 +56,26 @@ func Load(path string, required bool) (Config, error) {
 	return normalize(config, path)
 }
 
+// Save writes the current configuration as YAML.
+func Save(path string, config Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("encode config file: %w", err)
+	}
+	temp := path + ".tmp"
+	if err := os.WriteFile(temp, data, 0o600); err != nil {
+		return fmt.Errorf("write config file: %w", err)
+	}
+	if err := os.Rename(temp, path); err != nil {
+		_ = os.Remove(temp)
+		return fmt.Errorf("replace config file: %w", err)
+	}
+	return nil
+}
+
 func normalize(config Config, configPath string) (Config, error) {
 	if strings.TrimSpace(config.BT.DownloadDir) == "" {
 		config.BT.DownloadDir = DefaultDownloadDir
@@ -62,6 +85,12 @@ func normalize(config Config, configPath string) (Config, error) {
 	}
 	if config.BT.ListenPort < 1 || config.BT.ListenPort > 65535 {
 		return Config{}, errors.New("bt.listen_port must be between 1 and 65535")
+	}
+	if config.BT.DownloadLimitBps < 0 || config.BT.UploadLimitBps < 0 {
+		return Config{}, errors.New("bt rate limits must be zero or positive")
+	}
+	if config.BT.SeedRatioLimit < 0 {
+		return Config{}, errors.New("bt.seed_ratio_limit must be zero or positive")
 	}
 	if !filepath.IsAbs(config.BT.DownloadDir) {
 		base := filepath.Dir(configPath)

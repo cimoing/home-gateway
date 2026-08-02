@@ -24,11 +24,14 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) Register(api *gin.RouterGroup) {
 	group := api.Group("/bt")
 	group.GET("/settings", h.settings)
+	group.PUT("/settings", h.updateSettings)
+	group.GET("/status", h.status)
 	group.GET("/tasks", h.listTasks)
 	group.POST("/tasks/magnet", h.addMagnet)
 	group.POST("/tasks/torrent", h.addTorrent)
 	group.GET("/tasks/:taskID", h.getTask)
 	group.GET("/tasks/:taskID/files", h.files)
+	group.GET("/tasks/:taskID/peers", h.peers)
 	group.POST("/tasks/:taskID/pause", h.pause)
 	group.POST("/tasks/:taskID/resume", h.resume)
 	group.PUT("/tasks/:taskID/files", h.updateFiles)
@@ -37,6 +40,25 @@ func (h *Handler) Register(api *gin.RouterGroup) {
 
 func (h *Handler) settings(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"settings": h.service.Settings()})
+}
+
+func (h *Handler) updateSettings(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16*1024)
+	var request UpdateSettingsRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid BT settings"})
+		return
+	}
+	settings, err := h.service.UpdateSettings(request)
+	if err != nil {
+		writeBTError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"settings": settings})
+}
+
+func (h *Handler) status(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": h.service.Status()})
 }
 
 func (h *Handler) listTasks(c *gin.Context) {
@@ -67,7 +89,25 @@ func (h *Handler) getTask(c *gin.Context) {
 		writeBTError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"task": task, "files": files})
+	peers, err := h.service.Peers(c.Request.Context(), id)
+	if err != nil {
+		writeBTError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"task": task, "files": files, "peers": peers})
+}
+
+func (h *Handler) peers(c *gin.Context) {
+	id, ok := btPathID(c)
+	if !ok {
+		return
+	}
+	peers, err := h.service.Peers(c.Request.Context(), id)
+	if err != nil {
+		writeBTError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"peers": peers})
 }
 
 func (h *Handler) addMagnet(c *gin.Context) {

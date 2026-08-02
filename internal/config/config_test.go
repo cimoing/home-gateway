@@ -45,3 +45,23 @@ func TestMissingOptionalConfigUsesDefaults(t *testing.T) {
 		t.Fatalf("unexpected listen port %d", config.BT.ListenPort)
 	}
 }
+
+func TestSavePersistsRateAndSeedSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	config := Default()
+	config.BT.DownloadLimitBps = 1024 * 100
+	config.BT.UploadLimitBps = 1024 * 50
+	config.BT.SeedRatioLimit = 2
+	if err := Save(path, config); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.BT.DownloadLimitBps != 1024*100 ||
+		loaded.BT.UploadLimitBps != 1024*50 ||
+		loaded.BT.SeedRatioLimit != 2 {
+		t.Fatalf("unexpected saved config: %+v", loaded.BT)
+	}
+}

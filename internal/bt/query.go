@@ -90,9 +90,10 @@ func (s *Service) enrichTask(ctx context.Context, task model.BTTask) model.BTTas
 	task.CompletedBytes = stats.CompletedBytes
 	task.UploadedBytes = stats.UploadedBytes
 	task.Peers = stats.ActivePeers
-	if stats.DownloadedBytes > 0 {
-		task.Ratio = float64(stats.UploadedBytes) / float64(stats.DownloadedBytes)
-	}
+	task.Ratio = shareRatio(stats.UploadedBytes, stats.DownloadedBytes, task.TotalBytes)
+	s.mu.Lock()
+	task.SeedingPaused = s.seedPaused[task.InfoHash]
+	s.mu.Unlock()
 
 	now := time.Now()
 	s.mu.Lock()
@@ -125,6 +126,19 @@ func (s *Service) enrichTask(ctx context.Context, task model.BTTask) model.BTTas
 		)
 	}
 	return task
+}
+
+// Peers returns connected peers for a task.
+func (s *Service) Peers(ctx context.Context, taskID int64) ([]PeerInfo, error) {
+	task, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	runtime, ok := s.runtimeTask(task.InfoHash)
+	if !ok {
+		return nil, ErrUnavailable
+	}
+	return runtime.Peers(), nil
 }
 
 func (s *Service) runtimeTask(infoHash string) (EngineTask, bool) {

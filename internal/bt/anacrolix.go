@@ -8,19 +8,25 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/anacrolix/dht/v2"
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+	"golang.org/x/time/rate"
 )
+
+const rateLimiterBurst = 256 << 10
 
 // AnacrolixEngine adapts github.com/anacrolix/torrent to Engine.
 type AnacrolixEngine struct {
-	client         *torrent.Client
-	rootPath       string
-	rootStorage    storage.ClientImplCloser
-	mu             sync.RWMutex
-	tasks          map[string]*anacrolixTask
-	customStorages map[string]*sharedStorage
+	client          *torrent.Client
+	rootPath        string
+	rootStorage     storage.ClientImplCloser
+	downloadLimiter *rate.Limiter
+	uploadLimiter   *rate.Limiter
+	mu              sync.RWMutex
+	tasks           map[string]*anacrolixTask
+	customStorages  map[string]*sharedStorage
 }
 
 type sharedStorage struct {
@@ -29,24 +35,40 @@ type sharedStorage struct {
 }
 
 // NewAnacrolixEngine starts a process-wide BitTorrent client.
-func NewAnacrolixEngine(downloadDir string, listenPort int) (*AnacrolixEngine, error) {
+func NewAnacrolixEngine(
+	downloadDir string,
+	listenPort int,
+	downloadLimitBps int64,
+	uploadLimitBps int64,
+) (*AnacrolixEngine, error) {
 	rootPath := filepath.Clean(downloadDir)
 	rootStorage := storage.NewFile(rootPath)
+	downloadLimiter := rate.NewLimiter(rate.Inf, rateLimiterBurst)
+	uploadLimiter := rate.NewLimiter(rate.Inf, rateLimiterBurst)
+	applyRateLimit(downloadLimiter, downloadLimitBps)
+	applyRateLimit(uploadLimiter, uploadLimitBps)
+
 	config := torrent.NewDefaultClientConfig()
 	config.DataDir = rootPath
 	config.DefaultStorage = rootStorage
 	config.ListenPort = listenPort
+	config.Seed = true
+	config.DownloadRateLimiter = downloadLimiter
+	config.UploadRateLimiter = uploadLimiter
+
 	client, err := torrent.NewClient(config)
 	if err != nil {
 		_ = rootStorage.Close()
 		return nil, fmt.Errorf("start BitTorrent client: %w", err)
 	}
 	return &AnacrolixEngine{
-		client:         client,
-		rootPath:       rootPath,
-		rootStorage:    rootStorage,
-		tasks:          make(map[string]*anacrolixTask),
-		customStorages: make(map[string]*sharedStorage),
+		client:          client,
+		rootPath:        rootPath,
+		rootStorage:     rootStorage,
+		downloadLimiter: downloadLimiter,
+		uploadLimiter:   uploadLimiter,
+		tasks:           make(map[string]*anacrolixTask),
+		customStorages:  make(map[string]*sharedStorage),
 	}, nil
 }
 
@@ -119,6 +141,28 @@ func (e *AnacrolixEngine) Remove(infoHash string) error {
 	return nil
 }
 
+func (e *AnacrolixEngine) Stats() EngineStats {
+	clientStats := e.client.ConnStats()
+	result := EngineStats{
+		DownloadedBytes: clientStats.BytesReadUsefulData.Int64(),
+		UploadedBytes:   clientStats.BytesWrittenData.Int64(),
+	}
+	for _, server := range e.client.DhtServers() {
+		stats, ok := server.Stats().(dht.ServerStats)
+		if !ok {
+			continue
+		}
+		result.DHTNodes += stats.Nodes
+		result.DHTGoodNodes += stats.GoodNodes
+	}
+	return result
+}
+
+func (e *AnacrolixEngine) SetRateLimits(downloadBps, uploadBps int64) {
+	applyRateLimit(e.downloadLimiter, downloadBps)
+	applyRateLimit(e.uploadLimiter, uploadBps)
+}
+
 func (e *AnacrolixEngine) Close() error {
 	e.mu.Lock()
 	e.tasks = make(map[string]*anacrolixTask)
@@ -169,6 +213,20 @@ func (e *AnacrolixEngine) releaseStorage(path string) {
 	delete(e.customStorages, path)
 	e.mu.Unlock()
 	_ = entry.impl.Close()
+}
+
+func applyRateLimit(limiter *rate.Limiter, bps int64) {
+	if bps <= 0 {
+		limiter.SetLimit(rate.Inf)
+		limiter.SetBurst(rateLimiterBurst)
+		return
+	}
+	burst := int(bps)
+	if burst < rateLimiterBurst {
+		burst = rateLimiterBurst
+	}
+	limiter.SetLimit(rate.Limit(bps))
+	limiter.SetBurst(burst)
 }
 
 type anacrolixTask struct {
@@ -222,12 +280,45 @@ func (t *anacrolixTask) Stats() TaskStats {
 	return result
 }
 
+func (t *anacrolixTask) Peers() []PeerInfo {
+	conns := t.torrent.PeerConns()
+	peers := make([]PeerInfo, 0, len(conns))
+	for _, conn := range conns {
+		address := ""
+		if conn.RemoteAddr != nil {
+			address = conn.RemoteAddr.String()
+		}
+		stats := conn.Stats()
+		peers = append(peers, PeerInfo{
+			Address:      address,
+			PeerID:       formatPeerID(conn.PeerID),
+			Network:      conn.Network,
+			Source:       string(conn.Discovery),
+			Downloaded:   stats.BytesReadUsefulData.Int64(),
+			Uploaded:     stats.BytesWrittenData.Int64(),
+			DownloadRate: stats.DownloadRate,
+			UploadRate:   stats.LastWriteUploadRate,
+		})
+	}
+	return peers
+}
+
 func (t *anacrolixTask) Pause() {
 	t.torrent.DisallowDataDownload()
+	t.torrent.DisallowDataUpload()
 }
 
 func (t *anacrolixTask) Resume() {
 	t.torrent.AllowDataDownload()
+	t.torrent.AllowDataUpload()
+}
+
+func (t *anacrolixTask) PauseUpload() {
+	t.torrent.DisallowDataUpload()
+}
+
+func (t *anacrolixTask) ResumeUpload() {
+	t.torrent.AllowDataUpload()
 }
 
 func (t *anacrolixTask) SetFiles(selections []FileSelection) error {
@@ -254,4 +345,16 @@ func (t *anacrolixTask) SetFiles(selections []FileSelection) error {
 		}
 	}
 	return nil
+}
+
+func formatPeerID(id torrent.PeerID) string {
+	printable := make([]byte, 0, len(id))
+	for _, b := range id {
+		if b >= 32 && b < 127 {
+			printable = append(printable, b)
+		} else {
+			printable = append(printable, '.')
+		}
+	}
+	return string(printable)
 }

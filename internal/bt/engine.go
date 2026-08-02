@@ -17,6 +17,8 @@ type Engine interface {
 	AddTorrent(metainfo []byte, savePath string) (EngineTask, error)
 	Task(infoHash string) (EngineTask, bool)
 	Remove(infoHash string) error
+	Stats() EngineStats
+	SetRateLimits(downloadBps, uploadBps int64)
 	Close() error
 }
 
@@ -26,8 +28,11 @@ type EngineTask interface {
 	MetadataReady() <-chan struct{}
 	Metadata() TaskMetadata
 	Stats() TaskStats
+	Peers() []PeerInfo
 	Pause()
 	Resume()
+	PauseUpload()
+	ResumeUpload()
 	SetFiles([]FileSelection) error
 }
 
@@ -58,4 +63,24 @@ type TaskStats struct {
 	UploadedBytes   int64
 	ActivePeers     int
 	FileCompleted   map[int]int64
+}
+
+// PeerInfo describes one connected peer for a task.
+type PeerInfo struct {
+	Address      string  `json:"address"`
+	PeerID       string  `json:"peerId"`
+	Network      string  `json:"network"`
+	Source       string  `json:"source"`
+	Downloaded   int64   `json:"downloadedBytes"`
+	Uploaded     int64   `json:"uploadedBytes"`
+	DownloadRate float64 `json:"downloadRate"`
+	UploadRate   float64 `json:"uploadRate"`
+}
+
+// EngineStats contains process-wide BitTorrent gauges.
+type EngineStats struct {
+	DHTNodes        int
+	DHTGoodNodes    int
+	DownloadedBytes int64
+	UploadedBytes   int64
 }
