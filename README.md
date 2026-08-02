@@ -250,6 +250,8 @@ BT API 位于 `/api/bt`：
 
 ## 生产镜像
 
+### 本地源码构建
+
 ```powershell
 docker build -t home-gateway:latest .
 docker run --rm -p 8080:8080 `
@@ -260,5 +262,62 @@ docker run --rm -p 8080:8080 `
   home-gateway:latest run
 ```
 
-访问 `http://localhost:8080`。生产镜像采用多阶段构建，以非 root 用户运行，
-最终镜像仅包含静态 Go 二进制文件、Vue 构建产物，以及 `/config` 与 `/data` 卷挂载点。
+访问 `http://localhost:8080`。镜像以非 root 用户运行，前端已嵌入二进制，
+挂载点为 `/config` 与 `/data`。
+
+### 从 GitHub Release 构建（`Dockerfile.gh`）
+
+不在本地编译，而是下载已发布的 zip，校验哈希后打成运行镜像。适用于只想用
+官方发布产物、或在构建环境不便安装 Go/Node 的场景。
+
+需要传入：
+
+| 变量 | 说明 |
+|------|------|
+| `VERSION` | Release 版本，可带或不带 `v` 前缀（如 `1.0.0` / `v1.0.0`） |
+| `SHA256` | **当前目标架构**对应 zip 的 SHA-256（`home-gateway-linux-amd64.zip` 或 `arm64`） |
+| `REPO` | 可选，默认 `cimoing/home-gateway` |
+
+PowerShell 示例（amd64）：
+
+```powershell
+$VERSION = "v1.0.0"
+$ASSET = "home-gateway-linux-amd64.zip"
+$URL = "https://github.com/cimoing/home-gateway/releases/download/$VERSION/$ASSET"
+
+# 下载后计算哈希，或从 Release 说明 / checksum 文件获取
+Invoke-WebRequest $URL -OutFile $ASSET
+$SHA256 = (Get-FileHash $ASSET -Algorithm SHA256).Hash.ToLower()
+
+docker build `
+  -f Dockerfile.gh `
+  --build-arg VERSION=$VERSION `
+  --build-arg SHA256=$SHA256 `
+  -t "home-gateway:${VERSION}" `
+  .
+```
+
+多架构（buildx，需分别为各架构提供对应 zip 的哈希）：
+
+```powershell
+docker buildx build `
+  -f Dockerfile.gh `
+  --platform linux/amd64 `
+  --build-arg VERSION=v1.0.0 `
+  --build-arg SHA256=<amd64-zip-sha256> `
+  -t home-gateway:v1.0.0-amd64 `
+  --load `
+  .
+
+docker buildx build `
+  -f Dockerfile.gh `
+  --platform linux/arm64 `
+  --build-arg VERSION=v1.0.0 `
+  --build-arg SHA256=<arm64-zip-sha256> `
+  -t home-gateway:v1.0.0-arm64 `
+  --load `
+  .
+```
+
+树莓派等 arm64 设备请使用 `home-gateway-linux-arm64.zip` 的哈希，并加
+`--platform linux/arm64`。哈希不匹配时构建会失败，避免安装被篡改的二进制。
