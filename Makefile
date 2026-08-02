@@ -84,8 +84,8 @@ package: $(BIN_DIR)
 		$(CMD); \
 	cp -a $(DIST_DIR)/. "$${outdir}/web/"; \
 	cp config.example.yaml "$${outdir}/"; \
-	tar -C $(RELEASE_DIR) -czf "$(RELEASE_DIR)/$${name}.tar.gz" "$${name}"; \
-	echo "built $(RELEASE_DIR)/$${name}.tar.gz"
+	(cd $(RELEASE_DIR) && zip -r "$${name}.zip" "$${name}"); \
+	echo "built $(RELEASE_DIR)/$${name}.zip"
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)

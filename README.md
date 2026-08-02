@@ -31,8 +31,8 @@ make clean    # 清理 bin/、web/dist/ 与 dist/
 make help     # 查看全部目标
 ```
 
-本地交叉编译产物位于 `dist/home-gateway-linux-amd64.tar.gz` 与
-`dist/home-gateway-linux-arm64.tar.gz`。
+本地交叉编译产物位于 `dist/home-gateway-linux-amd64.zip` 与
+`dist/home-gateway-linux-arm64.zip`。
 
 ## GitHub Actions
 
@@ -40,10 +40,10 @@ make help     # 查看全部目标
 
 1. 运行 Go 测试并构建前端
 2. 交叉编译 **linux/amd64（x64）** 与 **linux/arm64（树莓派 64 位）**
-3. 打包为包含二进制、`web/` 静态资源与示例配置的 `.tar.gz` 产物
+3. 打包为包含二进制、`web/` 静态资源与示例配置的 `.zip` 产物
 4. 创建 GitHub Release 并上传两个架构的压缩包
 
-树莓派 4/5 及启用 64 位系统的树莓派 3 请使用 `home-gateway-linux-arm64.tar.gz`。
+树莓派 4/5 及启用 64 位系统的树莓派 3 请使用 `home-gateway-linux-arm64.zip`。
 
 ## 开发
 
