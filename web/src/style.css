@@ -697,9 +697,49 @@ button.linkish {
   margin-bottom: 22px;
 }
 
+.peer-row {
+  cursor: context-menu;
+}
+
 .peer-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+}
+
+.peer-context-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 220px;
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 6px;
+  border: 1px solid rgb(148 163 184 / 28%);
+  border-radius: 12px;
+  background: rgb(15 23 42 / 96%);
+  box-shadow: 0 16px 40px rgb(2 6 23 / 45%);
+  backdrop-filter: blur(10px);
+}
+
+.peer-context-menu button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #e2e8f0;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.peer-context-menu button:hover:not(:disabled) {
+  background: rgb(51 65 85 / 75%);
+}
+
+.peer-context-menu button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .bt-status-bar {

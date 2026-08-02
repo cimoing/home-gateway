@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -31,15 +32,16 @@ type Config struct {
 
 // BTConfig controls the embedded BitTorrent client.
 type BTConfig struct {
-	Enabled          bool    `yaml:"enabled" json:"enabled"`
-	StorageBackend   string  `yaml:"storage_backend" json:"storageBackend"`
-	DownloadDir      string  `yaml:"download_dir" json:"downloadDir"`
-	ListenPort       int     `yaml:"listen_port" json:"listenPort"`
-	DownloadLimitBps int64   `yaml:"download_limit_bps" json:"downloadLimitBps"`
-	UploadLimitBps   int64   `yaml:"upload_limit_bps" json:"uploadLimitBps"`
-	SeedRatioLimit   float64 `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
-	SyncStrategy     string  `yaml:"sync_strategy" json:"syncStrategy"`
-	SyncConcurrency  int     `yaml:"sync_concurrency" json:"syncConcurrency"`
+	Enabled          bool          `yaml:"enabled" json:"enabled"`
+	StorageBackend   string        `yaml:"storage_backend" json:"storageBackend"`
+	DownloadDir      string        `yaml:"download_dir" json:"downloadDir"`
+	ListenPort       int           `yaml:"listen_port" json:"listenPort"`
+	DownloadLimitBps int64         `yaml:"download_limit_bps" json:"downloadLimitBps"`
+	UploadLimitBps   int64         `yaml:"upload_limit_bps" json:"uploadLimitBps"`
+	SeedRatioLimit   float64       `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
+	SyncStrategy     string        `yaml:"sync_strategy" json:"syncStrategy"`
+	SyncConcurrency  int           `yaml:"sync_concurrency" json:"syncConcurrency"`
+	Block            BTBlockConfig `yaml:"block" json:"block"`
 
 	// EngineDir is the local filesystem root used by the torrent engine.
 	// When StorageBackend is empty it equals the resolved DownloadDir; when the
@@ -47,6 +49,14 @@ type BTConfig struct {
 	EngineDir string `yaml:"-" json:"-"`
 	// StoragePrefix is DownloadDir cleaned as a path on the selected backend.
 	StoragePrefix string `yaml:"-" json:"-"`
+}
+
+// BTBlockConfig lists peers to reject by client, peer ID, port, or IP/CIDR.
+type BTBlockConfig struct {
+	Clients  []string `yaml:"clients" json:"clients"`
+	PeerIDs  []string `yaml:"peer_ids" json:"peerIds"`
+	Ports    []int    `yaml:"ports" json:"ports"`
+	Networks []string `yaml:"networks" json:"networks"`
 }
 
 // StorageConfig holds named storage backends from YAML.
@@ -173,6 +183,9 @@ func normalize(config Config, configPath string) (Config, error) {
 	if config.BT.SyncConcurrency < 1 || config.BT.SyncConcurrency > 32 {
 		return Config{}, errors.New("bt.sync_concurrency must be between 1 and 32")
 	}
+	if err := normalizeBTBlock(&config.BT.Block); err != nil {
+		return Config{}, err
+	}
 	expanded, err := expandStorage(config.Storage)
 	if err != nil {
 		return Config{}, err
@@ -294,6 +307,70 @@ func pathCleanPOSIX(raw string) string {
 		out = append(out, part)
 	}
 	return strings.Join(out, "/")
+}
+
+func normalizeBTBlock(block *BTBlockConfig) error {
+	clients := make([]string, 0, len(block.Clients))
+	for _, client := range block.Clients {
+		client = strings.TrimSpace(client)
+		if client == "" {
+			continue
+		}
+		clients = append(clients, client)
+	}
+	block.Clients = clients
+
+	peerIDs := make([]string, 0, len(block.PeerIDs))
+	seenPeerIDs := make(map[string]struct{}, len(block.PeerIDs))
+	for _, peerID := range block.PeerIDs {
+		peerID = strings.TrimSpace(peerID)
+		if peerID == "" {
+			continue
+		}
+		if _, exists := seenPeerIDs[peerID]; exists {
+			continue
+		}
+		seenPeerIDs[peerID] = struct{}{}
+		peerIDs = append(peerIDs, peerID)
+	}
+	block.PeerIDs = peerIDs
+
+	ports := make([]int, 0, len(block.Ports))
+	seenPorts := make(map[int]struct{}, len(block.Ports))
+	for _, port := range block.Ports {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("bt.block.ports entry %d must be between 1 and 65535", port)
+		}
+		if _, exists := seenPorts[port]; exists {
+			continue
+		}
+		seenPorts[port] = struct{}{}
+		ports = append(ports, port)
+	}
+	block.Ports = ports
+
+	networks := make([]string, 0, len(block.Networks))
+	seenNetworks := make(map[string]struct{}, len(block.Networks))
+	for _, entry := range block.Networks {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			if _, _, err := net.ParseCIDR(entry); err != nil {
+				return fmt.Errorf("bt.block.networks entry %q must be a valid CIDR", entry)
+			}
+		} else if net.ParseIP(entry) == nil {
+			return fmt.Errorf("bt.block.networks entry %q must be an IP or CIDR", entry)
+		}
+		if _, exists := seenNetworks[entry]; exists {
+			continue
+		}
+		seenNetworks[entry] = struct{}{}
+		networks = append(networks, entry)
+	}
+	block.Networks = networks
+	return nil
 }
 
 func expandStorage(storage StorageConfig) (StorageConfig, error) {

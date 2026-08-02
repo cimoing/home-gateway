@@ -40,12 +40,21 @@ export interface BTFile {
 export interface BTPeer {
   address: string
   peerId: string
+  client?: string
+  clientVersion?: string
   network: string
   source: string
   downloadedBytes: number
   uploadedBytes: number
   downloadRate: number
   uploadRate: number
+}
+
+export interface BTBlockConfig {
+  clients?: string[]
+  peerIds?: string[]
+  ports?: number[]
+  networks?: string[]
 }
 
 export interface BTSettings {
@@ -60,6 +69,7 @@ export interface BTSettings {
   seedRatioLimit: number
   syncStrategy: string
   syncConcurrency: number
+  block?: BTBlockConfig
 }
 
 export interface BTStatus {

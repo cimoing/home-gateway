@@ -59,6 +59,12 @@ func runServer(cmd *cobra.Command) error {
 			config.BT.ListenPort,
 			config.BT.DownloadLimitBps,
 			config.BT.UploadLimitBps,
+			bt.BlockConfig{
+				Clients:  append([]string(nil), config.BT.Block.Clients...),
+				PeerIDs:  append([]string(nil), config.BT.Block.PeerIDs...),
+				Ports:    append([]int(nil), config.BT.Block.Ports...),
+				Networks: append([]string(nil), config.BT.Block.Networks...),
+			},
 		)
 		if err != nil {
 			return err

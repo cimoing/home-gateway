@@ -71,8 +71,9 @@ func (e *fakeEngine) Remove(hash string) error {
 	return nil
 }
 
-func (e *fakeEngine) Stats() EngineStats         { return EngineStats{} }
-func (e *fakeEngine) SetRateLimits(int64, int64) {}
+func (e *fakeEngine) Stats() EngineStats               { return EngineStats{} }
+func (e *fakeEngine) SetRateLimits(int64, int64)       {}
+func (e *fakeEngine) SetBlockConfig(BlockConfig) error { return nil }
 func (e *fakeEngine) Close() error {
 	e.closed = true
 	return nil

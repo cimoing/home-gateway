@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ type AnacrolixEngine struct {
 	rootStorage     storage.ClientImplCloser
 	downloadLimiter *rate.Limiter
 	uploadLimiter   *rate.Limiter
+	blocker         *Blocker
 	mu              sync.RWMutex
 	tasks           map[string]*anacrolixTask
 	customStorages  map[string]*sharedStorage
@@ -40,6 +42,7 @@ func NewAnacrolixEngine(
 	listenPort int,
 	downloadLimitBps int64,
 	uploadLimitBps int64,
+	blockConfig BlockConfig,
 ) (*AnacrolixEngine, error) {
 	rootPath := filepath.Clean(downloadDir)
 	rootStorage := storage.NewFile(rootPath)
@@ -48,6 +51,12 @@ func NewAnacrolixEngine(
 	applyRateLimit(downloadLimiter, downloadLimitBps)
 	applyRateLimit(uploadLimiter, uploadLimitBps)
 
+	blocker, err := NewBlocker(blockConfig)
+	if err != nil {
+		_ = rootStorage.Close()
+		return nil, fmt.Errorf("configure BT blocklist: %w", err)
+	}
+
 	config := torrent.NewDefaultClientConfig()
 	config.DataDir = rootPath
 	config.DefaultStorage = rootStorage
@@ -55,6 +64,11 @@ func NewAnacrolixEngine(
 	config.Seed = true
 	config.DownloadRateLimiter = downloadLimiter
 	config.UploadRateLimiter = uploadLimiter
+	config.Bep20 = ClientBep20
+	config.ExtendedHandshakeClientVersion = clientExtendedHandshakeVersion()
+	config.HTTPUserAgent = clientHTTPUserAgent()
+	config.UpnpID = clientUpnpID()
+	blocker.install(config)
 
 	client, err := torrent.NewClient(config)
 	if err != nil {
@@ -67,6 +81,7 @@ func NewAnacrolixEngine(
 		rootStorage:     rootStorage,
 		downloadLimiter: downloadLimiter,
 		uploadLimiter:   uploadLimiter,
+		blocker:         blocker,
 		tasks:           make(map[string]*anacrolixTask),
 		customStorages:  make(map[string]*sharedStorage),
 	}, nil
@@ -165,6 +180,38 @@ func (e *AnacrolixEngine) Stats() EngineStats {
 func (e *AnacrolixEngine) SetRateLimits(downloadBps, uploadBps int64) {
 	applyRateLimit(e.downloadLimiter, downloadBps)
 	applyRateLimit(e.uploadLimiter, uploadBps)
+}
+
+func (e *AnacrolixEngine) SetBlockConfig(config BlockConfig) error {
+	if e.blocker == nil {
+		return nil
+	}
+	if err := e.blocker.Replace(config); err != nil {
+		return err
+	}
+	e.dropBlockedPeers()
+	return nil
+}
+
+func (e *AnacrolixEngine) dropBlockedPeers() {
+	if e.client == nil || e.blocker == nil {
+		return
+	}
+	for _, task := range e.client.Torrents() {
+		for _, conn := range task.PeerConns() {
+			reason, blocked := e.blocker.shouldBlock(
+				peerExtendedClientName(conn),
+				conn.PeerID,
+				conn.RemoteAddr,
+				conn.PeerListenPort,
+			)
+			if !blocked {
+				continue
+			}
+			log.Printf("BT dropped peer %s (%s)", conn.RemoteAddr, reason)
+			dropPeerConn(conn)
+		}
+	}
 }
 
 func (e *AnacrolixEngine) Close() error {
@@ -295,16 +342,28 @@ func (t *anacrolixTask) Peers() []PeerInfo {
 		}
 		stats := conn.Stats()
 		downloaded, uploaded := payloadBytes(stats.ConnStats)
+		client, version := identifyPeerClient(peerExtendedClientName(conn), conn.PeerID)
 		peers = append(peers, PeerInfo{
-			Address:    address,
-			PeerID:     formatPeerID(conn.PeerID),
-			Network:    conn.Network,
-			Source:     string(conn.Discovery),
-			Downloaded: downloaded,
-			Uploaded:   uploaded,
+			Address:       address,
+			PeerID:        formatPeerID(conn.PeerID),
+			Client:        client,
+			ClientVersion: version,
+			Network:       conn.Network,
+			Source:        string(conn.Discovery),
+			Downloaded:    downloaded,
+			Uploaded:      uploaded,
 		})
 	}
 	return peers
+}
+
+func peerExtendedClientName(conn *torrent.PeerConn) string {
+	value := conn.PeerClientName.Load()
+	if value == nil {
+		return ""
+	}
+	name, _ := value.(string)
+	return name
 }
 
 // payloadBytes returns torrent file piece payload totals.

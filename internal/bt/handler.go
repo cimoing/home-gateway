@@ -25,6 +25,7 @@ func (h *Handler) Register(api *gin.RouterGroup) {
 	group := api.Group("/bt")
 	group.GET("/settings", h.settings)
 	group.PUT("/settings", h.updateSettings)
+	group.POST("/block", h.addBlock)
 	group.GET("/status", h.status)
 	group.GET("/tasks", h.listTasks)
 	group.POST("/tasks/magnet", h.addMagnet)
@@ -56,6 +57,21 @@ func (h *Handler) updateSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"settings": settings})
+}
+
+func (h *Handler) addBlock(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16*1024)
+	var request AddBlockRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid BT block request"})
+		return
+	}
+	block, err := h.service.AddBlock(request)
+	if err != nil {
+		writeBTError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"block": block})
 }
 
 func (h *Handler) status(c *gin.Context) {

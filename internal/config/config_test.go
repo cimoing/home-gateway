@@ -123,6 +123,57 @@ dns:
 	}
 }
 
+func TestBTBlockConfigNormalized(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+bt:
+  download_dir: downloads
+  block:
+    clients:
+      - Xunlei
+      - ""
+      - qB
+    ports: [6881, 6881, 51413]
+    networks:
+      - 203.0.113.0/24
+      - 198.51.100.10
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Load(configPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.BT.Block.Clients) != 2 ||
+		config.BT.Block.Clients[0] != "Xunlei" ||
+		config.BT.Block.Clients[1] != "qB" {
+		t.Fatalf("clients: %+v", config.BT.Block.Clients)
+	}
+	if len(config.BT.Block.Ports) != 2 {
+		t.Fatalf("ports: %+v", config.BT.Block.Ports)
+	}
+	if len(config.BT.Block.Networks) != 2 {
+		t.Fatalf("networks: %+v", config.BT.Block.Networks)
+	}
+}
+
+func TestBTBlockConfigRejectsInvalidNetwork(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+bt:
+  download_dir: downloads
+  block:
+    networks: ["not-an-ip"]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(configPath, true); err == nil {
+		t.Fatal("expected invalid network error")
+	}
+}
+
 func TestSavePersistsRateAndSeedSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	config := Default()

@@ -16,6 +16,23 @@ bt:
   sync_strategy: complete
   # max concurrent uploads while syncing to remote storage
   sync_concurrency: 2
+  # Peer blocklist (hot-reloadable via POST /api/system/reload-config)
+  block:
+    clients: []
+    # clients:
+    #   - Xunlei
+    #   - XL
+    #   - qBittorrent
+    peer_ids: []
+    # peer_ids:
+    #   - "-qB4500-........"
+    ports: []
+    # ports:
+    #   - 6881
+    networks: []
+    # networks:
+    #   - 203.0.113.0/24
+    #   - 198.51.100.10
 
 storage:
   backends:

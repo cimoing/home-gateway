@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +19,21 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+func blockConfigFromApp(config appconfig.BTBlockConfig) BlockConfig {
+	return BlockConfig{
+		Clients:  append([]string(nil), config.Clients...),
+		PeerIDs:  append([]string(nil), config.PeerIDs...),
+		Ports:    append([]int(nil), config.Ports...),
+		Networks: append([]string(nil), config.Networks...),
+	}
+}
+
+// AddBlockRequest adds one blocklist entry from the peers UI.
+type AddBlockRequest struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
 // AddOptions controls the immutable storage location and initial state.
 type AddOptions struct {
 	Subdirectory   string `json:"subdirectory"`
@@ -27,17 +44,18 @@ type AddOptions struct {
 
 // Settings is the runtime configuration exposed to the UI.
 type Settings struct {
-	Enabled          bool    `json:"enabled"`
-	StorageBackend   string  `json:"storageBackend"`
-	DownloadDir      string  `json:"downloadDir"`
-	DownloadRoot     string  `json:"downloadRoot"`
-	ListenPort       int     `json:"listenPort"`
-	Running          bool    `json:"running"`
-	DownloadLimitBps int64   `json:"downloadLimitBps"`
-	UploadLimitBps   int64   `json:"uploadLimitBps"`
-	SeedRatioLimit   float64 `json:"seedRatioLimit"`
-	SyncStrategy     string  `json:"syncStrategy"`
-	SyncConcurrency  int     `json:"syncConcurrency"`
+	Enabled          bool                    `json:"enabled"`
+	StorageBackend   string                  `json:"storageBackend"`
+	DownloadDir      string                  `json:"downloadDir"`
+	DownloadRoot     string                  `json:"downloadRoot"`
+	ListenPort       int                     `json:"listenPort"`
+	Running          bool                    `json:"running"`
+	DownloadLimitBps int64                   `json:"downloadLimitBps"`
+	UploadLimitBps   int64                   `json:"uploadLimitBps"`
+	SeedRatioLimit   float64                 `json:"seedRatioLimit"`
+	SyncStrategy     string                  `json:"syncStrategy"`
+	SyncConcurrency  int                     `json:"syncConcurrency"`
+	Block            appconfig.BTBlockConfig `json:"block"`
 }
 
 // UpdateSettingsRequest contains mutable BT settings.
@@ -67,14 +85,14 @@ type rateSample struct {
 
 // Service persists task intent and coordinates the runtime engine.
 type Service struct {
-	db         *sqlx.DB
-	engine     Engine
-	storage    *storage.Service
-	config     appconfig.BTConfig
-	configPath string
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
+	db           *sqlx.DB
+	engine       Engine
+	storage      *storage.Service
+	config       appconfig.BTConfig
+	configPath   string
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 	mu           sync.Mutex
 	samples      map[string]rateSample
 	peerSamples  map[string]rateSample
@@ -140,6 +158,12 @@ func (s *Service) Settings() Settings {
 		SeedRatioLimit:   s.config.SeedRatioLimit,
 		SyncStrategy:     s.config.SyncStrategy,
 		SyncConcurrency:  s.config.SyncConcurrency,
+		Block: appconfig.BTBlockConfig{
+			Clients:  append([]string(nil), s.config.Block.Clients...),
+			PeerIDs:  append([]string(nil), s.config.Block.PeerIDs...),
+			Ports:    append([]int(nil), s.config.Block.Ports...),
+			Networks: append([]string(nil), s.config.Block.Networks...),
+		},
 	}
 }
 
@@ -155,13 +179,97 @@ func (s *Service) ApplyConfig(config appconfig.BTConfig) {
 	s.config.SeedRatioLimit = config.SeedRatioLimit
 	s.config.SyncStrategy = config.SyncStrategy
 	s.config.SyncConcurrency = config.SyncConcurrency
+	s.config.Block = config.Block
 	downloadLimit := s.config.DownloadLimitBps
 	uploadLimit := s.config.UploadLimitBps
+	block := blockConfigFromApp(s.config.Block)
 	engine := s.engine
 	s.mu.Unlock()
 	if engine != nil {
 		engine.SetRateLimits(downloadLimit, uploadLimit)
+		if err := engine.SetBlockConfig(block); err != nil {
+			log.Printf("BT blocklist reload failed: %v", err)
+		}
 	}
+}
+
+// AddBlock appends one blocklist rule, persists YAML, and applies it immediately.
+func (s *Service) AddBlock(request AddBlockRequest) (appconfig.BTBlockConfig, error) {
+	ruleType := strings.ToLower(strings.TrimSpace(request.Type))
+	value := strings.TrimSpace(request.Value)
+	if value == "" {
+		return appconfig.BTBlockConfig{}, fmt.Errorf("%w: block value is required", ErrInvalidInput)
+	}
+
+	s.mu.Lock()
+	block := s.config.Block
+	switch ruleType {
+	case "ip":
+		ip := value
+		if host, _, err := net.SplitHostPort(value); err == nil {
+			ip = host
+		}
+		ip = strings.Trim(ip, "[]")
+		if parsed := net.ParseIP(ip); parsed == nil {
+			s.mu.Unlock()
+			return appconfig.BTBlockConfig{}, fmt.Errorf("%w: invalid IP %q", ErrInvalidInput, value)
+		}
+		block.Networks = appendUniqueString(block.Networks, ip)
+	case "client":
+		block.Clients = appendUniqueString(block.Clients, value)
+	case "port":
+		port, err := strconv.Atoi(value)
+		if err != nil || port < 1 || port > 65535 {
+			s.mu.Unlock()
+			return appconfig.BTBlockConfig{}, fmt.Errorf("%w: invalid port %q", ErrInvalidInput, value)
+		}
+		block.Ports = appendUniqueInt(block.Ports, port)
+	case "peerid", "peer_id":
+		block.PeerIDs = appendUniqueString(block.PeerIDs, value)
+	default:
+		s.mu.Unlock()
+		return appconfig.BTBlockConfig{}, fmt.Errorf("%w: block type must be ip, client, port, or peerId", ErrInvalidInput)
+	}
+	s.config.Block = block
+	btConfig := s.config
+	configPath := s.configPath
+	engine := s.engine
+	s.mu.Unlock()
+
+	if configPath != "" {
+		existing, err := appconfig.Load(configPath, false)
+		if err != nil {
+			return appconfig.BTBlockConfig{}, fmt.Errorf("load config for BT blocklist: %w", err)
+		}
+		existing.BT = btConfig
+		if err := appconfig.Save(configPath, existing); err != nil {
+			return appconfig.BTBlockConfig{}, fmt.Errorf("persist BT blocklist: %w", err)
+		}
+	}
+	if engine != nil {
+		if err := engine.SetBlockConfig(blockConfigFromApp(block)); err != nil {
+			return appconfig.BTBlockConfig{}, err
+		}
+	}
+	return block, nil
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if strings.EqualFold(existing, value) {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func appendUniqueInt(values []int, value int) []int {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 // UpdateSettings persists mutable limits and applies them to the engine.

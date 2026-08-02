@@ -19,6 +19,7 @@ type Engine interface {
 	Remove(infoHash string) error
 	Stats() EngineStats
 	SetRateLimits(downloadBps, uploadBps int64)
+	SetBlockConfig(config BlockConfig) error
 	Close() error
 }
 
@@ -70,14 +71,16 @@ type TaskStats struct {
 // PeerInfo describes one connected peer for a task.
 // Downloaded/Uploaded and rates are file payload only.
 type PeerInfo struct {
-	Address      string `json:"address"`
-	PeerID       string `json:"peerId"`
-	Network      string `json:"network"`
-	Source       string `json:"source"`
-	Downloaded   int64  `json:"downloadedBytes"`
-	Uploaded     int64  `json:"uploadedBytes"`
-	DownloadRate int64  `json:"downloadRate"`
-	UploadRate   int64  `json:"uploadRate"`
+	Address       string `json:"address"`
+	PeerID        string `json:"peerId"`
+	Client        string `json:"client"`
+	ClientVersion string `json:"clientVersion"`
+	Network       string `json:"network"`
+	Source        string `json:"source"`
+	Downloaded    int64  `json:"downloadedBytes"`
+	Uploaded      int64  `json:"uploadedBytes"`
+	DownloadRate  int64  `json:"downloadRate"`
+	UploadRate    int64  `json:"uploadRate"`
 }
 
 // EngineStats contains process-wide BitTorrent gauges.

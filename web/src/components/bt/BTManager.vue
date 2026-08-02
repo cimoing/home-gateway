@@ -146,6 +146,17 @@ async function saveFiles(files: Array<{ index: number; priority: number }>) {
   }, '文件选择已保存。')
 }
 
+async function blockPeer(payload: { type: string; value: string; label: string }) {
+  if (!confirm(`${payload.label}？规则将写入配置文件并立即生效。`)) return
+  await run(async () => {
+    await api('/api/bt/block', {
+      method: 'POST',
+      body: JSON.stringify({ type: payload.type, value: payload.value }),
+    })
+    await refreshSelected(false)
+  }, '屏蔽规则已添加。')
+}
+
 async function saveSettings(payload: {
   downloadLimitBps: number
   uploadLimitBps: number
@@ -232,6 +243,7 @@ function taskAdded(task: BTTask) {
       :busy="busy"
       @close="selectedTask = null; selectedPeers = []"
       @save-files="saveFiles"
+      @block-peer="blockPeer"
     />
 
     <aside class="bt-status-bar" aria-live="polite">

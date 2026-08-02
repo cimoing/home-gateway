@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { BTFile, BTPeer, BTTask } from './types'
 import { formatBytes, formatRate, syncStatusLabel, syncStrategyLabel } from './types'
+
+export type PeerBlockType = 'ip' | 'client' | 'port' | 'peerId'
 
 const props = defineProps<{
   task: BTTask
@@ -12,8 +14,14 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   saveFiles: [files: Array<{ index: number; priority: number }>]
+  blockPeer: [payload: { type: PeerBlockType; value: string; label: string }]
 }>()
 const priorities = ref<Record<number, number>>({})
+const menu = ref<{
+  x: number
+  y: number
+  items: Array<{ type: PeerBlockType; value: string; label: string }>
+} | null>(null)
 
 watch(
   () => props.files,
@@ -89,6 +97,84 @@ function sourceLabel(source: string) {
   }
   return labels[source] || source || '—'
 }
+
+function peerHost(address: string) {
+  const value = address.trim()
+  if (!value) return ''
+  if (value.startsWith('[')) {
+    const end = value.indexOf(']')
+    if (end > 1) return value.slice(1, end)
+  }
+  const colon = value.lastIndexOf(':')
+  if (colon > 0 && value.includes('.') && !value.includes('::')) {
+    return value.slice(0, colon)
+  }
+  if (colon > 0) return value.slice(0, colon)
+  return value
+}
+
+function peerPort(address: string) {
+  const value = address.trim()
+  if (!value) return ''
+  if (value.startsWith('[')) {
+    const end = value.indexOf(']:')
+    if (end >= 0) return value.slice(end + 2)
+    return ''
+  }
+  const colon = value.lastIndexOf(':')
+  if (colon <= 0) return ''
+  return value.slice(colon + 1)
+}
+
+function openPeerMenu(event: MouseEvent, peer: BTPeer) {
+  event.preventDefault()
+  const items: Array<{ type: PeerBlockType; value: string; label: string }> = []
+  const host = peerHost(peer.address || '')
+  const port = peerPort(peer.address || '')
+  if (host) items.push({ type: 'ip', value: host, label: `屏蔽此 IP（${host}）` })
+  if (peer.client) {
+    items.push({
+      type: 'client',
+      value: peer.client,
+      label: `屏蔽此客户端（${peer.client}）`,
+    })
+  }
+  if (port) items.push({ type: 'port', value: port, label: `屏蔽此端口（${port}）` })
+  if (peer.peerId) {
+    items.push({
+      type: 'peerId',
+      value: peer.peerId,
+      label: `屏蔽此 Peer ID（${peer.peerId}）`,
+    })
+  }
+  if (!items.length) {
+    menu.value = null
+    return
+  }
+  menu.value = { x: event.clientX, y: event.clientY, items }
+}
+
+function closeMenu() {
+  menu.value = null
+}
+
+function chooseBlock(item: { type: PeerBlockType; value: string; label: string }) {
+  menu.value = null
+  emit('blockPeer', item)
+}
+
+function onWindowKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeMenu()
+}
+
+onMounted(() => {
+  window.addEventListener('click', closeMenu)
+  window.addEventListener('keydown', onWindowKeydown)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('click', closeMenu)
+  window.removeEventListener('keydown', onWindowKeydown)
+})
 </script>
 
 <template>
@@ -125,7 +211,7 @@ function sourceLabel(source: string) {
       <div class="file-heading">
         <div>
           <h3>Peers（{{ peers.length }}）</h3>
-          <p>当前已连接的节点</p>
+          <p>右键节点可屏蔽 IP / 客户端 / 端口 / Peer ID</p>
         </div>
       </div>
       <p v-if="!peers.length" class="empty-state">暂无已连接的 peer。</p>
@@ -134,6 +220,8 @@ function sourceLabel(source: string) {
           <thead>
             <tr>
               <th>地址</th>
+              <th>客户端</th>
+              <th>版本</th>
               <th>网络</th>
               <th>来源</th>
               <th>下载</th>
@@ -142,8 +230,15 @@ function sourceLabel(source: string) {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="peer in peers" :key="`${peer.address}-${peer.peerId}`">
+            <tr
+              v-for="peer in peers"
+              :key="`${peer.address}-${peer.peerId}`"
+              class="peer-row"
+              @contextmenu="openPeerMenu($event, peer)"
+            >
               <td class="content-cell">{{ peer.address || '—' }}</td>
+              <td>{{ peer.client || '—' }}</td>
+              <td>{{ peer.clientVersion || '—' }}</td>
               <td>{{ peer.network || '—' }}</td>
               <td>{{ sourceLabel(peer.source) }}</td>
               <td>{{ formatRate(peer.downloadRate) }}</td>
@@ -209,5 +304,24 @@ function sourceLabel(source: string) {
         </table>
       </div>
     </section>
+
+    <div
+      v-if="menu"
+      class="peer-context-menu"
+      :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
+      role="menu"
+      @click.stop
+    >
+      <button
+        v-for="item in menu.items"
+        :key="`${item.type}:${item.value}`"
+        type="button"
+        role="menuitem"
+        :disabled="busy"
+        @click="chooseBlock(item)"
+      >
+        {{ item.label }}
+      </button>
+    </div>
   </div>
 </template>

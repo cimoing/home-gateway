@@ -140,6 +140,8 @@ docker run --rm -it `
 - `bt.*`：下载引擎参数（部分可在 Web 设置页写回）
   - `bt.storage_backend`：可选，默认存储后端名称；留空则使用本地文件系统
   - `bt.download_dir`：未选后端时为本地路径；选中后端时为该后端上的相对目录
+  - `bt.block`：屏蔽规则（客户端、Peer ID、端口、IP/CIDR）；Peers 列表右键可追加，支持热加载
+  - `POST /api/bt/block`：追加一条屏蔽规则并写回 YAML
 - `storage.backends[]`：按**名称**定义 local / smb / s3；密钥用 `${ENV}`
 - `dns.cloudflare.token` / `zones`：Cloudflare 连接与托管域名列表
 
