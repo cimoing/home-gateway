@@ -41,3 +41,15 @@ func TestIdentifyPeerClientUnknownID(t *testing.T) {
 		t.Fatalf("got %q %q, want empty", client, version)
 	}
 }
+
+func TestIdentifyPeerClientAnacrolix(t *testing.T) {
+	var id [20]byte
+	copy(id[:], []byte("-GT0003-abcdefghijk"))
+	client, version := identifyPeerClient("", id)
+	if client != "anacrolix" {
+		t.Fatalf("client = %q, want anacrolix", client)
+	}
+	if version != "0.0.0.3" {
+		t.Fatalf("version = %q, want 0.0.0.3", version)
+	}
+}

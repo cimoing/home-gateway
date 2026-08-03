@@ -1,22 +1,19 @@
 package bt
 
-const (
-	// ClientName is the BitTorrent client type advertised to peers.
-	ClientName = "Biubiubiu"
-	// ClientVersion is the advertised client version.
-	ClientVersion = "1.0.0"
-	// ClientBep20 is the Azureus-style peer ID prefix (BEP 20).
-	ClientBep20 = "-BU1000-"
+import (
+	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/version"
 )
 
-func clientExtendedHandshakeVersion() string {
-	return ClientName + "/" + ClientVersion
-}
+const (
+	// ClientName is the BitTorrent client type advertised to peers.
+	ClientName = "anacrolix"
+)
 
-func clientHTTPUserAgent() string {
-	return ClientName + "/" + ClientVersion
-}
-
-func clientUpnpID() string {
-	return ClientName + " " + ClientVersion
+func applyClientIdentity(config *torrent.ClientConfig) {
+	// Match anacrolix/torrent defaults: Peer ID -GT0003-, UA anacrolix-torrent/<ver>.
+	config.Bep20 = version.DefaultBep20Prefix
+	config.HTTPUserAgent = version.DefaultHttpUserAgent
+	config.ExtendedHandshakeClientVersion = version.DefaultHttpUserAgent
+	config.UpnpID = ClientName
 }

@@ -64,10 +64,7 @@ func NewAnacrolixEngine(
 	config.Seed = true
 	config.DownloadRateLimiter = downloadLimiter
 	config.UploadRateLimiter = uploadLimiter
-	config.Bep20 = ClientBep20
-	config.ExtendedHandshakeClientVersion = clientExtendedHandshakeVersion()
-	config.HTTPUserAgent = clientHTTPUserAgent()
-	config.UpnpID = clientUpnpID()
+	applyClientIdentity(config)
 	blocker.install(config)
 
 	client, err := torrent.NewClient(config)
