@@ -33,6 +33,8 @@ type BTTask struct {
 	ErrorMessage     string     `db:"error_message" json:"error,omitempty"`
 	TotalBytes       int64      `db:"total_bytes" json:"totalBytes"`
 	CompletedBytes   int64      `db:"-" json:"completedBytes"`
+	SyncedBytes      int64      `db:"-" json:"syncedBytes"`
+	SyncTotalBytes   int64      `db:"-" json:"syncTotalBytes"`
 	DownloadRate     int64      `db:"-" json:"downloadRate"`
 	UploadRate       int64      `db:"-" json:"uploadRate"`
 	UploadedBytes    int64      `db:"-" json:"uploadedBytes"`
@@ -56,5 +58,6 @@ type BTTaskFile struct {
 	Priority       int    `db:"priority" json:"priority"`
 	SyncStatus     string `db:"sync_status" json:"syncStatus"`
 	SyncError      string `db:"sync_error" json:"syncError,omitempty"`
+	SyncedBytes    int64  `db:"synced_bytes" json:"syncedBytes"`
 	CompletedBytes int64  `db:"-" json:"completedBytes"`
 }

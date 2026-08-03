@@ -2,7 +2,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import FileSelectionTree from './FileSelectionTree.vue'
 import type { BTFile, BTPeer, BTTask } from './types'
-import { formatBytes, formatRate, syncStatusLabel, syncStrategyLabel } from './types'
+import {
+  formatBytes,
+  formatRate,
+  formatSyncProgress,
+  syncStatusLabel,
+  syncStrategyLabel,
+} from './types'
 
 export type PeerBlockType = 'ip' | 'client' | 'port' | 'peerId'
 type DetailTab = 'info' | 'peers' | 'files'
@@ -247,7 +253,19 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="task.syncStatus && task.syncStatus !== 'none'">
             <dt>同步状态</dt>
-            <dd>{{ syncStatusLabel(task.syncStatus) || task.syncStatus }}</dd>
+            <dd>
+              {{ syncStatusLabel(task.syncStatus) || task.syncStatus }}
+              <span
+                v-if="formatSyncProgress(task.syncedBytes, task.syncTotalBytes)"
+                class="sync-progress"
+              >
+                {{ formatSyncProgress(task.syncedBytes, task.syncTotalBytes) }}
+              </span>
+            </dd>
+          </div>
+          <div v-if="task.syncError">
+            <dt>同步错误</dt>
+            <dd class="error-message">{{ task.syncError }}</dd>
           </div>
           <div>
             <dt>Peers</dt>

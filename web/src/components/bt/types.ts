@@ -20,6 +20,8 @@ export interface BTTask {
   syncStrategy?: string
   syncStatus?: string
   syncError?: string
+  syncedBytes?: number
+  syncTotalBytes?: number
   etaSeconds?: number
   createdAt: string
 }
@@ -34,6 +36,7 @@ export interface BTFile {
   priority: number
   syncStatus?: string
   syncError?: string
+  syncedBytes?: number
   completedBytes: number
 }
 
@@ -123,4 +126,14 @@ export function syncStrategyLabel(strategy?: string) {
     default:
       return strategy || '—'
   }
+}
+
+export function syncProgressPercent(synced = 0, total = 0) {
+  if (!total || total <= 0) return 0
+  return Math.min(100, (synced / total) * 100)
+}
+
+export function formatSyncProgress(synced = 0, total = 0) {
+  if (!total || total <= 0) return ''
+  return `${formatBytes(synced)} / ${formatBytes(total)}（${syncProgressPercent(synced, total).toFixed(1)}%）`
 }

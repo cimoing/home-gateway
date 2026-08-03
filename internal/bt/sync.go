@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,31 @@ import (
 	"home-gateway/internal/model"
 	"home-gateway/internal/storage"
 )
+
+const (
+	syncProgressMinBytes    = 256 << 10
+	syncProgressMinInterval = 500 * time.Millisecond
+)
+
+// RequestSync enqueues a background sync and returns the current task snapshot.
+func (s *Service) RequestSync(ctx context.Context, id int64) (model.BTTask, error) {
+	task, err := s.GetTask(ctx, id)
+	if err != nil {
+		return model.BTTask{}, err
+	}
+	if task.StorageBackend == "" || task.SyncStatus == model.BTSyncNone {
+		return task, nil
+	}
+	if s.storage == nil {
+		return model.BTTask{}, ErrUnavailable
+	}
+	log.Printf(
+		"bt sync requested task=%d backend=%q status=%s strategy=%s",
+		task.ID, task.StorageBackend, task.SyncStatus, task.SyncStrategy,
+	)
+	s.enqueueSync(id)
+	return s.GetTask(ctx, id)
+}
 
 // SyncTask uploads unfinished selected files from local staging to the remote backend.
 func (s *Service) SyncTask(ctx context.Context, id int64) (model.BTTask, error) {
@@ -32,6 +58,7 @@ func (s *Service) SyncTask(ctx context.Context, id int64) (model.BTTask, error) 
 		return model.BTTask{}, err
 	}
 	targets := make([]model.BTTaskFile, 0, len(files))
+	var totalBytes int64
 	for _, file := range files {
 		if !file.Selected {
 			continue
@@ -43,21 +70,41 @@ func (s *Service) SyncTask(ctx context.Context, id int64) (model.BTTask, error) 
 			continue
 		}
 		targets = append(targets, file)
+		totalBytes += file.Length
 	}
 	if len(targets) == 0 {
+		log.Printf("bt sync skipped task=%d reason=no-pending-files", id)
 		_ = s.refreshTaskSyncStatus(ctx, id)
 		return s.GetTask(ctx, id)
 	}
+	log.Printf(
+		"bt sync start task=%d backend=%q files=%d bytes=%d strategy=%s",
+		task.ID, task.StorageBackend, len(targets), totalBytes, task.SyncStrategy,
+	)
+	started := time.Now()
 	if err := s.setSyncState(ctx, id, model.BTSyncSyncing, ""); err != nil {
 		return model.BTTask{}, err
 	}
 	if err := s.syncFilesConcurrently(ctx, task, targets); err != nil {
+		log.Printf(
+			"bt sync failed task=%d elapsed=%s err=%v",
+			id, time.Since(started).Round(time.Millisecond), err,
+		)
 		_ = s.setSyncState(ctx, id, model.BTSyncError, err.Error())
 		_ = s.refreshTaskSyncStatus(ctx, id)
 		return s.GetTask(ctx, id)
 	}
 	_ = s.refreshTaskSyncStatus(ctx, id)
-	return s.GetTask(ctx, id)
+	result, err := s.GetTask(ctx, id)
+	if err != nil {
+		return model.BTTask{}, err
+	}
+	log.Printf(
+		"bt sync finished task=%d status=%s synced=%d/%d elapsed=%s",
+		id, result.SyncStatus, result.SyncedBytes, result.SyncTotalBytes,
+		time.Since(started).Round(time.Millisecond),
+	)
+	return result, nil
 }
 
 func (s *Service) enqueueSync(taskID int64) {
@@ -175,19 +222,32 @@ func (s *Service) syncSingleFile(ctx context.Context, task model.BTTask, file mo
 	}
 	defer s.releaseSyncSlot()
 
-	_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncSyncing, "")
+	started := time.Now()
+	log.Printf(
+		"bt sync file start task=%d index=%d path=%q size=%d backend=%q",
+		task.ID, file.FileIndex, file.Path, file.Length, task.StorageBackend,
+	)
+	_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncSyncing, "", 0)
 	localPath := filepath.Join(task.SavePath, filepath.FromSlash(file.Path))
 	reader, err := os.Open(localPath)
 	if err != nil {
 		message := err.Error()
-		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, message)
+		log.Printf(
+			"bt sync file open failed task=%d index=%d path=%q err=%v",
+			task.ID, file.FileIndex, file.Path, err,
+		)
+		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, message, 0)
 		return fmt.Errorf("open local file %s: %w", file.Path, err)
 	}
 	defer reader.Close()
 
 	backend, err := s.storage.OpenByName(ctx, task.StorageBackend)
 	if err != nil {
-		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, err.Error())
+		log.Printf(
+			"bt sync file backend failed task=%d index=%d backend=%q err=%v",
+			task.ID, file.FileIndex, task.StorageBackend, err,
+		)
+		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, err.Error(), 0)
 		return err
 	}
 	defer backend.Close()
@@ -198,20 +258,79 @@ func (s *Service) syncSingleFile(ctx context.Context, task model.BTTask, file mo
 	}
 	writer, err := backend.Create(ctx, remotePath)
 	if err != nil {
-		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, err.Error())
+		log.Printf(
+			"bt sync file create failed task=%d index=%d remote=%q err=%v",
+			task.ID, file.FileIndex, remotePath, err,
+		)
+		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, err.Error(), 0)
 		return fmt.Errorf("create remote file %s: %w", remotePath, err)
 	}
-	_, copyErr := io.Copy(writer, reader)
+
+	progress := &progressReader{
+		reader: reader,
+		report: func(synced int64) {
+			_ = s.updateFileSyncedBytes(ctx, task.ID, file.FileIndex, synced)
+		},
+	}
+	_, copyErr := io.Copy(writer, progress)
 	closeErr := writer.Close()
+	syncedBytes := progress.n
 	if copyErr != nil {
-		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, copyErr.Error())
+		log.Printf(
+			"bt sync file copy failed task=%d index=%d path=%q synced=%d err=%v",
+			task.ID, file.FileIndex, file.Path, syncedBytes, copyErr,
+		)
+		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, copyErr.Error(), syncedBytes)
 		return copyErr
 	}
 	if closeErr != nil {
-		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, closeErr.Error())
+		log.Printf(
+			"bt sync file close failed task=%d index=%d path=%q synced=%d err=%v",
+			task.ID, file.FileIndex, file.Path, syncedBytes, closeErr,
+		)
+		_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncError, closeErr.Error(), syncedBytes)
 		return closeErr
 	}
-	return s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncSynced, "")
+	if file.Length > 0 {
+		syncedBytes = file.Length
+	}
+	if err := s.setFileSyncState(
+		ctx, task.ID, file.FileIndex, model.BTSyncSynced, "", syncedBytes,
+	); err != nil {
+		return err
+	}
+	log.Printf(
+		"bt sync file done task=%d index=%d path=%q bytes=%d elapsed=%s",
+		task.ID, file.FileIndex, file.Path, syncedBytes,
+		time.Since(started).Round(time.Millisecond),
+	)
+	return nil
+}
+
+type progressReader struct {
+	reader   io.Reader
+	report   func(int64)
+	n        int64
+	lastN    int64
+	lastAt   time.Time
+	reported bool
+}
+
+func (p *progressReader) Read(buf []byte) (int, error) {
+	n, err := p.reader.Read(buf)
+	if n > 0 {
+		p.n += int64(n)
+		if p.report != nil &&
+			(!p.reported ||
+				p.n-p.lastN >= syncProgressMinBytes ||
+				time.Since(p.lastAt) >= syncProgressMinInterval) {
+			p.reported = true
+			p.lastN = p.n
+			p.lastAt = time.Now()
+			p.report(p.n)
+		}
+	}
+	return n, err
 }
 
 func (s *Service) acquireSyncSlot(ctx context.Context) error {
@@ -253,15 +372,39 @@ func (s *Service) setFileSyncState(
 	fileIndex int,
 	status string,
 	message string,
+	syncedBytes int64,
 ) error {
 	if len(message) > 1024 {
 		message = message[:1024]
 	}
+	if syncedBytes < 0 {
+		syncedBytes = 0
+	}
 	query := s.db.Rebind(`
-		UPDATE bt_task_files SET sync_status = ?, sync_error = ?
+		UPDATE bt_task_files
+		SET sync_status = ?, sync_error = ?, synced_bytes = ?
 		WHERE task_id = ? AND file_index = ?
 	`)
-	_, err := s.db.ExecContext(ctx, query, status, message, taskID, fileIndex)
+	_, err := s.db.ExecContext(ctx, query, status, message, syncedBytes, taskID, fileIndex)
+	return err
+}
+
+func (s *Service) updateFileSyncedBytes(
+	ctx context.Context,
+	taskID int64,
+	fileIndex int,
+	syncedBytes int64,
+) error {
+	if syncedBytes < 0 {
+		syncedBytes = 0
+	}
+	query := s.db.Rebind(`
+		UPDATE bt_task_files SET synced_bytes = ?
+		WHERE task_id = ? AND file_index = ? AND sync_status = ?
+	`)
+	_, err := s.db.ExecContext(
+		ctx, query, syncedBytes, taskID, fileIndex, model.BTSyncSyncing,
+	)
 	return err
 }
 
@@ -430,7 +573,7 @@ func (s *Service) maybeEnqueuePerFileSyncs(ctx context.Context, task model.BTTas
 		case model.BTSyncSynced, model.BTSyncSyncing, model.BTSyncError:
 			continue
 		case model.BTSyncNone:
-			_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncPending, "")
+			_ = s.setFileSyncState(ctx, task.ID, file.FileIndex, model.BTSyncPending, "", 0)
 		}
 		s.enqueueFileSync(task.ID, file.FileIndex)
 	}

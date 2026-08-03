@@ -577,7 +577,8 @@ func (s *Service) applyMetadata(ctx context.Context, taskID int64, runtime Engin
 
 	var existing []model.BTTaskFile
 	queryFiles := tx.Rebind(`
-		SELECT id, task_id, file_index, path, length, selected, priority, sync_status, sync_error
+		SELECT id, task_id, file_index, path, length, selected, priority,
+		       sync_status, sync_error, synced_bytes
 		FROM bt_task_files WHERE task_id = ?
 	`)
 	if err := tx.SelectContext(ctx, &existing, queryFiles, taskID); err != nil {
@@ -593,8 +594,9 @@ func (s *Service) applyMetadata(ctx context.Context, taskID int64, runtime Engin
 		if !ok {
 			insert := tx.Rebind(`
 				INSERT INTO bt_task_files
-				    (task_id, file_index, path, length, selected, priority, sync_status, sync_error)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				    (task_id, file_index, path, length, selected, priority,
+				     sync_status, sync_error, synced_bytes)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
 			`)
 			if _, err := tx.ExecContext(
 				ctx, insert, taskID, file.Index, file.Path, file.Length, true, 1,

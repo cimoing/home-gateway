@@ -45,14 +45,40 @@ func newSMBBackend(cfg smbConfig) (*smbBackend, error) {
 	return &smbBackend{cfg: cfg}, nil
 }
 
-func (b *smbBackend) withShare(ctx context.Context, fn func(*smb2.Share) error) error {
+type smbSession struct {
+	conn    net.Conn
+	session *smb2.Session
+	share   *smb2.Share
+}
+
+func (s *smbSession) close() {
+	if s == nil {
+		return
+	}
+	if s.share != nil {
+		_ = s.share.Umount()
+		s.share = nil
+	}
+	if s.session != nil {
+		_ = s.session.Logoff()
+		s.session = nil
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
+	}
+}
+
+func (b *smbBackend) openSession(ctx context.Context) (*smbSession, error) {
 	dialer := &net.Dialer{Timeout: 15 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", b.cfg.Host, b.cfg.Port))
 	if err != nil {
-		return fmt.Errorf("%w: dial smb: %v", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: dial smb: %v", ErrUnavailable, err)
 	}
-	defer conn.Close()
-
+	if tcp, ok := conn.(*net.TCPConn); ok {
+		_ = tcp.SetKeepAlive(true)
+		_ = tcp.SetKeepAlivePeriod(30 * time.Second)
+	}
 	session, err := (&smb2.Dialer{
 		Initiator: &smb2.NTLMInitiator{
 			User:     b.cfg.Username,
@@ -61,16 +87,25 @@ func (b *smbBackend) withShare(ctx context.Context, fn func(*smb2.Share) error) 
 		},
 	}).Dial(conn)
 	if err != nil {
-		return fmt.Errorf("%w: smb login: %v", ErrUnavailable, err)
+		_ = conn.Close()
+		return nil, fmt.Errorf("%w: smb login: %v", ErrUnavailable, err)
 	}
-	defer session.Logoff()
-
 	share, err := session.Mount(b.cfg.Share)
 	if err != nil {
-		return fmt.Errorf("%w: mount smb share: %v", ErrUnavailable, err)
+		_ = session.Logoff()
+		_ = conn.Close()
+		return nil, fmt.Errorf("%w: mount smb share: %v", ErrUnavailable, err)
 	}
-	defer share.Umount()
-	return fn(share)
+	return &smbSession{conn: conn, session: session, share: share}, nil
+}
+
+func (b *smbBackend) withShare(ctx context.Context, fn func(*smb2.Share) error) error {
+	session, err := b.openSession(ctx)
+	if err != nil {
+		return err
+	}
+	defer session.close()
+	return fn(session.share)
 }
 
 func (b *smbBackend) Ping(ctx context.Context) error {
@@ -221,7 +256,23 @@ func (b *smbBackend) Create(ctx context.Context, filePath string) (io.WriteClose
 	if err != nil || cleaned == "" {
 		return nil, fmt.Errorf("%w: file path is required", ErrInvalidInput)
 	}
-	return &smbDeferredWriter{backend: b, path: cleaned}, nil
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	session, err := b.openSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	writer := &smbStreamWriter{
+		ctx:     ctx,
+		session: session,
+		path:    cleaned,
+	}
+	if err := writer.openFile(); err != nil {
+		session.close()
+		return nil, err
+	}
+	return writer, nil
 }
 
 func (b *smbBackend) Stat(ctx context.Context, target string) (Entry, error) {
@@ -256,40 +307,82 @@ func (b *smbBackend) Stat(ctx context.Context, target string) (Entry, error) {
 
 func (b *smbBackend) Close() error { return nil }
 
-type smbDeferredWriter struct {
-	backend *smbBackend
+// smbStreamWriter streams bytes directly to SMB without buffering the whole file.
+type smbStreamWriter struct {
+	ctx     context.Context
+	session *smbSession
+	file    *smb2.File
 	path    string
-	buf     bytes.Buffer
+	written int64
+	failed  bool
 	closed  bool
 }
 
-func (w *smbDeferredWriter) Write(p []byte) (int, error) {
+func (w *smbStreamWriter) openFile() error {
+	if dir := path.Dir(w.path); dir != "." {
+		if err := mkdirAllSMB(w.session.share, dir); err != nil {
+			return err
+		}
+	}
+	file, err := w.session.share.Create(w.path)
+	if err != nil {
+		return err
+	}
+	w.file = file
+	return nil
+}
+
+func (w *smbStreamWriter) Write(p []byte) (int, error) {
 	if w.closed {
 		return 0, errors.New("writer closed")
 	}
-	return w.buf.Write(p)
+	if err := w.ctx.Err(); err != nil {
+		w.failed = true
+		return 0, err
+	}
+	if w.file == nil {
+		return 0, errors.New("smb writer not open")
+	}
+	n, err := w.file.Write(p)
+	if n > 0 {
+		w.written += int64(n)
+	}
+	if err != nil {
+		w.failed = true
+	}
+	return n, err
 }
 
-func (w *smbDeferredWriter) Close() error {
+func (w *smbStreamWriter) Close() error {
 	if w.closed {
 		return nil
 	}
 	w.closed = true
-	data := w.buf.Bytes()
-	return w.backend.withShare(context.Background(), func(share *smb2.Share) error {
-		if dir := path.Dir(w.path); dir != "." {
-			if err := mkdirAllSMB(share, dir); err != nil {
-				return err
-			}
+
+	var closeErr error
+	if w.file != nil {
+		closeErr = w.file.Close()
+		w.file = nil
+		if closeErr != nil {
+			w.failed = true
 		}
-		file, err := share.Create(w.path)
-		if err != nil {
-			return err
+	}
+	if w.failed || w.ctx.Err() != nil {
+		if w.session != nil && w.session.share != nil {
+			_ = w.session.share.Remove(w.path)
 		}
-		defer file.Close()
-		_, err = file.Write(data)
+	}
+	if w.session != nil {
+		w.session.close()
+		w.session = nil
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := w.ctx.Err(); err != nil {
 		return err
-	})
+	}
+	return nil
 }
 
 func mkdirAllSMB(share *smb2.Share, dir string) error {

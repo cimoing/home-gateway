@@ -701,6 +701,13 @@ button.linkish {
   font-size: 12px;
 }
 
+.sync-progress {
+  display: inline-block;
+  margin-left: 8px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
 .peers-table {
   margin-bottom: 0;
 }

@@ -210,7 +210,7 @@ func (h *Handler) resume(c *gin.Context) {
 }
 
 func (h *Handler) syncTask(c *gin.Context) {
-	h.control(c, h.service.SyncTask)
+	h.control(c, h.service.RequestSync)
 }
 
 func (h *Handler) control(

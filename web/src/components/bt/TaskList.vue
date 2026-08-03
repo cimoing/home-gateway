@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import type { BTTask } from './types'
-import { formatBytes, formatDuration, syncStatusLabel } from './types'
+import {
+  formatBytes,
+  formatDuration,
+  formatSyncProgress,
+  syncStatusLabel,
+} from './types'
 
 defineProps<{ tasks: BTTask[]; busy: boolean }>()
 const emit = defineEmits<{
@@ -16,7 +21,17 @@ function progress(task: BTTask) {
 }
 
 function syncLabel(task: BTTask) {
-  return syncStatusLabel(task.syncStatus)
+  const status = syncStatusLabel(task.syncStatus)
+  if (!status) return ''
+  if (task.syncStatus === 'syncing' || task.syncStatus === 'pending') {
+    const detail = formatSyncProgress(task.syncedBytes, task.syncTotalBytes)
+    return detail ? `${status} ${detail}` : status
+  }
+  if (task.syncStatus === 'synced') {
+    const detail = formatSyncProgress(task.syncedBytes, task.syncTotalBytes)
+    return detail || status
+  }
+  return status
 }
 </script>
 
