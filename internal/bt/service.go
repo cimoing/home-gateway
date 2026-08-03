@@ -153,8 +153,8 @@ func (s *Service) Settings() Settings {
 		DownloadRoot:     s.config.EngineDir,
 		ListenPort:       s.config.ListenPort,
 		Running:          s.engine != nil,
-		DownloadLimitBps: s.config.DownloadLimitBps,
-		UploadLimitBps:   s.config.UploadLimitBps,
+		DownloadLimitBps: s.config.DownloadLimitBps.Int64(),
+		UploadLimitBps:   s.config.UploadLimitBps.Int64(),
 		SeedRatioLimit:   s.config.SeedRatioLimit,
 		SyncStrategy:     s.config.SyncStrategy,
 		SyncConcurrency:  s.config.SyncConcurrency,
@@ -180,8 +180,8 @@ func (s *Service) ApplyConfig(config appconfig.BTConfig) {
 	s.config.SyncStrategy = config.SyncStrategy
 	s.config.SyncConcurrency = config.SyncConcurrency
 	s.config.Block = config.Block
-	downloadLimit := s.config.DownloadLimitBps
-	uploadLimit := s.config.UploadLimitBps
+	downloadLimit := s.config.DownloadLimitBps.Int64()
+	uploadLimit := s.config.UploadLimitBps.Int64()
 	block := blockConfigFromApp(s.config.Block)
 	engine := s.engine
 	s.mu.Unlock()
@@ -280,14 +280,14 @@ func (s *Service) UpdateSettings(request UpdateSettingsRequest) (Settings, error
 			s.mu.Unlock()
 			return Settings{}, fmt.Errorf("%w: downloadLimitBps must be >= 0", ErrInvalidInput)
 		}
-		s.config.DownloadLimitBps = *request.DownloadLimitBps
+		s.config.DownloadLimitBps = appconfig.ByteRate(*request.DownloadLimitBps)
 	}
 	if request.UploadLimitBps != nil {
 		if *request.UploadLimitBps < 0 {
 			s.mu.Unlock()
 			return Settings{}, fmt.Errorf("%w: uploadLimitBps must be >= 0", ErrInvalidInput)
 		}
-		s.config.UploadLimitBps = *request.UploadLimitBps
+		s.config.UploadLimitBps = appconfig.ByteRate(*request.UploadLimitBps)
 	}
 	if request.SeedRatioLimit != nil {
 		if *request.SeedRatioLimit < 0 {
@@ -312,8 +312,8 @@ func (s *Service) UpdateSettings(request UpdateSettingsRequest) (Settings, error
 		s.config.SyncConcurrency = *request.SyncConcurrency
 	}
 	btConfig := s.config
-	downloadLimit := s.config.DownloadLimitBps
-	uploadLimit := s.config.UploadLimitBps
+	downloadLimit := s.config.DownloadLimitBps.Int64()
+	uploadLimit := s.config.UploadLimitBps.Int64()
 	configPath := s.configPath
 	engine := s.engine
 	s.mu.Unlock()

@@ -184,8 +184,8 @@ bt:
 func TestSavePersistsRateAndSeedSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	config := Default()
-	config.BT.DownloadLimitBps = 1024 * 100
-	config.BT.UploadLimitBps = 1024 * 50
+	config.BT.DownloadLimitBps = ByteRate(1024 * 100)
+	config.BT.UploadLimitBps = ByteRate(1024 * 50)
 	config.BT.SeedRatioLimit = 2
 	if err := Save(path, config); err != nil {
 		t.Fatal(err)

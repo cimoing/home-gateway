@@ -57,8 +57,8 @@ func runServer(cmd *cobra.Command) error {
 		anacrolix, err := bt.NewAnacrolixEngine(
 			config.BT.EngineDir,
 			config.BT.ListenPort,
-			config.BT.DownloadLimitBps,
-			config.BT.UploadLimitBps,
+			config.BT.DownloadLimitBps.Int64(),
+			config.BT.UploadLimitBps.Int64(),
 			bt.BlockConfig{
 				Clients:  append([]string(nil), config.BT.Block.Clients...),
 				PeerIDs:  append([]string(nil), config.BT.Block.PeerIDs...),

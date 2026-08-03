@@ -38,8 +38,8 @@ type BTConfig struct {
 	StorageBackend   string        `yaml:"storage_backend" json:"storageBackend"`
 	DownloadDir      string        `yaml:"download_dir" json:"downloadDir"`
 	ListenPort       int           `yaml:"listen_port" json:"listenPort"`
-	DownloadLimitBps int64         `yaml:"download_limit_bps" json:"downloadLimitBps"`
-	UploadLimitBps   int64         `yaml:"upload_limit_bps" json:"uploadLimitBps"`
+	DownloadLimitBps ByteRate      `yaml:"download_limit_bps" json:"downloadLimitBps"`
+	UploadLimitBps   ByteRate      `yaml:"upload_limit_bps" json:"uploadLimitBps"`
 	SeedRatioLimit   float64       `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
 	SyncStrategy     string        `yaml:"sync_strategy" json:"syncStrategy"`
 	SyncConcurrency  int           `yaml:"sync_concurrency" json:"syncConcurrency"`
