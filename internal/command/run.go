@@ -94,7 +94,7 @@ func runServer(cmd *cobra.Command) error {
 	}
 	storageService := storage.NewService(config.Storage.Backends)
 	dnsService := dns.NewService(config.DNS.Cloudflare)
-	btService := bt.NewServiceWithStorage(db, engine, storageService, config.BT, configPath)
+	btService := bt.NewService(db, engine, config.BT, configPath)
 	defer func() {
 		if err := btService.Close(); err != nil {
 			log.Printf("BitTorrent shutdown failed: %v", err)

@@ -1,37 +1,17 @@
 <script setup lang="ts">
 import type { BTTask } from './types'
-import {
-  formatBytes,
-  formatDuration,
-  formatSyncProgress,
-  syncStatusLabel,
-} from './types'
+import { formatBytes, formatDuration } from './types'
 
 defineProps<{ tasks: BTTask[]; busy: boolean }>()
 const emit = defineEmits<{
   select: [task: BTTask]
   pause: [task: BTTask]
   resume: [task: BTTask]
-  sync: [task: BTTask]
   remove: [task: BTTask]
 }>()
 
 function progress(task: BTTask) {
   return task.totalBytes ? Math.min(100, (task.completedBytes / task.totalBytes) * 100) : 0
-}
-
-function syncLabel(task: BTTask) {
-  const status = syncStatusLabel(task.syncStatus)
-  if (!status) return ''
-  if (task.syncStatus === 'syncing' || task.syncStatus === 'pending') {
-    const detail = formatSyncProgress(task.syncedBytes, task.syncTotalBytes)
-    return detail ? `${status} ${detail}` : status
-  }
-  if (task.syncStatus === 'synced') {
-    const detail = formatSyncProgress(task.syncedBytes, task.syncTotalBytes)
-    return detail || status
-  }
-  return status
 }
 </script>
 
@@ -59,10 +39,8 @@ function syncLabel(task: BTTask) {
           <span>↑ {{ formatBytes(task.uploadRate) }}/s</span>
           <span>{{ task.peers }} peers</span>
           <span>ETA {{ formatDuration(task.etaSeconds) }}</span>
-          <span v-if="syncLabel(task)">同步 {{ syncLabel(task) }}</span>
         </div>
         <p v-if="task.error" class="error-message">{{ task.error }}</p>
-        <p v-if="task.syncError" class="error-message">{{ task.syncError }}</p>
       </div>
       <div class="task-actions" @click.stop>
         <button
@@ -75,14 +53,6 @@ function syncLabel(task: BTTask) {
         </button>
         <button v-else class="small-button" :disabled="busy" @click="emit('resume', task)">
           恢复
-        </button>
-        <button
-          v-if="task.syncStatus && task.syncStatus !== 'none'"
-          class="small-button secondary-button"
-          :disabled="busy || task.syncStatus === 'syncing'"
-          @click="emit('sync', task)"
-        >
-          同步
         </button>
         <button class="small-button danger-button" :disabled="busy" @click="emit('remove', task)">
           删除

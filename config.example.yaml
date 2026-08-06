@@ -8,12 +8,7 @@ bt:
   #   # Docker Compose profile: http://transmission:9091/transmission/rpc
   #   username: ""
   #   password: ${TRANSMISSION_RPC_PASSWORD}
-  # Optional default storage backend name from storage.backends.
-  # Empty = local filesystem at download_dir.
-  # storage_backend: local
-  # When storage_backend is set, download_dir is a relative path on that backend.
-  # When unset, download_dir is a local filesystem path.
-  # Relative to the DATA directory (default "." / container "/data").
+  # Local download directory relative to DATA (default "." / container "/data").
   download_dir: bt/downloads
   listen_port: 42069
   # 0 = unlimited. Accepts bytes/s or human rates: 512K, 10M, 1G (binary units).
@@ -21,10 +16,6 @@ bt:
   upload_limit_bps: 0
   # 0 = disabled; pause seeding when share ratio reaches this value
   seed_ratio_limit: 0
-  # complete = sync after whole task finishes; per_file = sync each file when ready
-  sync_strategy: complete
-  # max concurrent uploads while syncing to remote storage
-  sync_concurrency: 2
   # Peer blocklist (hot-reloadable via POST /api/system/reload-config)
   # With engine=transmission, client/peer-id/port rules are not enforced by the daemon;
   # IP/CIDR denial needs Transmission's own blocklist.

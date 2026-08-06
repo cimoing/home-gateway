@@ -15,16 +15,13 @@ import (
 )
 
 const (
-	DefaultPath             = "/config/config.yaml"
-	DefaultDownloadDir      = "bt/downloads"
-	DefaultStagingDir       = "bt/.staging"
-	DefaultListenPort       = 42069
-	DefaultSyncStrategy     = "complete"
-	DefaultSyncConcurrency  = 2
-	DefaultBTEngine         = "anacrolix"
-	BTEngineAnacrolix       = "anacrolix"
-	BTEngineTransmission    = "transmission"
-	DefaultTransmissionURL  = "http://127.0.0.1:9091/transmission/rpc"
+	DefaultPath            = "/config/config.yaml"
+	DefaultDownloadDir     = "bt/downloads"
+	DefaultListenPort      = 42069
+	DefaultBTEngine        = "anacrolix"
+	BTEngineAnacrolix      = "anacrolix"
+	BTEngineTransmission   = "transmission"
+	DefaultTransmissionURL = "http://127.0.0.1:9091/transmission/rpc"
 )
 
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
@@ -36,27 +33,20 @@ type Config struct {
 	DNS     DNSConfig     `yaml:"dns" json:"dns"`
 }
 
-// BTConfig controls the embedded BitTorrent client.
+// BTConfig controls the BitTorrent download engine.
 type BTConfig struct {
-	Enabled          bool                `yaml:"enabled" json:"enabled"`
-	Engine           string              `yaml:"engine" json:"engine"`
-	Transmission     TransmissionConfig  `yaml:"transmission" json:"transmission"`
-	StorageBackend   string              `yaml:"storage_backend" json:"storageBackend"`
-	DownloadDir      string              `yaml:"download_dir" json:"downloadDir"`
-	ListenPort       int                 `yaml:"listen_port" json:"listenPort"`
-	DownloadLimitBps ByteRate            `yaml:"download_limit_bps" json:"downloadLimitBps"`
-	UploadLimitBps   ByteRate            `yaml:"upload_limit_bps" json:"uploadLimitBps"`
-	SeedRatioLimit   float64             `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
-	SyncStrategy     string              `yaml:"sync_strategy" json:"syncStrategy"`
-	SyncConcurrency  int                 `yaml:"sync_concurrency" json:"syncConcurrency"`
-	Block            BTBlockConfig       `yaml:"block" json:"block"`
+	Enabled          bool               `yaml:"enabled" json:"enabled"`
+	Engine           string             `yaml:"engine" json:"engine"`
+	Transmission     TransmissionConfig `yaml:"transmission" json:"transmission"`
+	DownloadDir      string             `yaml:"download_dir" json:"downloadDir"`
+	ListenPort       int                `yaml:"listen_port" json:"listenPort"`
+	DownloadLimitBps ByteRate           `yaml:"download_limit_bps" json:"downloadLimitBps"`
+	UploadLimitBps   ByteRate           `yaml:"upload_limit_bps" json:"uploadLimitBps"`
+	SeedRatioLimit   float64            `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
+	Block            BTBlockConfig      `yaml:"block" json:"block"`
 
-	// EngineDir is the local filesystem root used by the torrent engine.
-	// When StorageBackend is empty it equals the resolved DownloadDir; when the
-	// backend is remote it is a local staging directory.
+	// EngineDir is the absolute local filesystem root used by the torrent engine.
 	EngineDir string `yaml:"-" json:"-"`
-	// StoragePrefix is DownloadDir cleaned as a path on the selected backend.
-	StoragePrefix string `yaml:"-" json:"-"`
 }
 
 // TransmissionConfig configures the optional transmission-daemon RPC backend.
@@ -102,13 +92,11 @@ type CloudflareConfig struct {
 // Default returns safe settings when the default config file is absent.
 func Default() Config {
 	return Config{BT: BTConfig{
-		Enabled:         true,
-		Engine:          DefaultBTEngine,
-		Transmission:    TransmissionConfig{URL: DefaultTransmissionURL},
-		DownloadDir:     DefaultDownloadDir,
-		ListenPort:      DefaultListenPort,
-		SyncStrategy:    DefaultSyncStrategy,
-		SyncConcurrency: DefaultSyncConcurrency,
+		Enabled:      true,
+		Engine:       DefaultBTEngine,
+		Transmission: TransmissionConfig{URL: DefaultTransmissionURL},
+		DownloadDir:  DefaultDownloadDir,
+		ListenPort:   DefaultListenPort,
 	}}
 }
 
@@ -218,20 +206,6 @@ func normalize(config Config, configPath string) (Config, error) {
 	if config.BT.SeedRatioLimit < 0 {
 		return Config{}, errors.New("bt.seed_ratio_limit must be zero or positive")
 	}
-	if strings.TrimSpace(config.BT.SyncStrategy) == "" {
-		config.BT.SyncStrategy = DefaultSyncStrategy
-	}
-	switch config.BT.SyncStrategy {
-	case "complete", "per_file":
-	default:
-		return Config{}, errors.New("bt.sync_strategy must be complete or per_file")
-	}
-	if config.BT.SyncConcurrency == 0 {
-		config.BT.SyncConcurrency = DefaultSyncConcurrency
-	}
-	if config.BT.SyncConcurrency < 1 || config.BT.SyncConcurrency > 32 {
-		return Config{}, errors.New("bt.sync_concurrency must be between 1 and 32")
-	}
 	if err := normalizeBTBlock(&config.BT.Block); err != nil {
 		return Config{}, err
 	}
@@ -254,108 +228,17 @@ func normalize(config Config, configPath string) (Config, error) {
 }
 
 func resolveBTPaths(config *Config) error {
-	config.BT.StorageBackend = strings.TrimSpace(config.BT.StorageBackend)
 	downloadDir := strings.TrimSpace(config.BT.DownloadDir)
 	if downloadDir == "" {
 		downloadDir = DefaultDownloadDir
 	}
-	config.BT.DownloadDir = downloadDir
-	config.BT.StoragePrefix = ""
-
-	if config.BT.StorageBackend == "" {
-		absolute, err := datadir.Resolve(downloadDir)
-		if err != nil {
-			return fmt.Errorf("resolve bt.download_dir: %w", err)
-		}
-		config.BT.DownloadDir = absolute
-		config.BT.EngineDir = absolute
-		return nil
-	}
-
-	// The default download dir means "backend root" when a storage backend is selected.
-	if downloadDir == DefaultDownloadDir {
-		downloadDir = ""
-		config.BT.DownloadDir = ""
-	}
-	prefix, err := cleanConfigRelativePath(downloadDir)
+	absolute, err := datadir.Resolve(downloadDir)
 	if err != nil {
-		return fmt.Errorf("bt.download_dir: %w", err)
+		return fmt.Errorf("resolve bt.download_dir: %w", err)
 	}
-	config.BT.DownloadDir = prefix
-	var backend *StorageBackendConfig
-	for index := range config.Storage.Backends {
-		if config.Storage.Backends[index].Name == config.BT.StorageBackend {
-			backend = &config.Storage.Backends[index]
-			break
-		}
-	}
-	if backend == nil {
-		return fmt.Errorf("bt.storage_backend %q is not defined in storage.backends", config.BT.StorageBackend)
-	}
-	if backend.Enabled != nil && !*backend.Enabled {
-		return fmt.Errorf("bt.storage_backend %q is disabled", config.BT.StorageBackend)
-	}
-	config.BT.StoragePrefix = prefix
-	switch backend.Type {
-	case "local":
-		root, _ := backend.Config["root"].(string)
-		root = filepath.Clean(strings.TrimSpace(root))
-		if root == "" || !filepath.IsAbs(root) {
-			return fmt.Errorf("bt.storage_backend %q has invalid local root", config.BT.StorageBackend)
-		}
-		engineDir := root
-		if prefix != "" {
-			engineDir = filepath.Join(root, filepath.FromSlash(prefix))
-		}
-		relative, err := filepath.Rel(root, engineDir)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("bt.download_dir escapes storage backend root")
-		}
-		config.BT.EngineDir = filepath.Clean(engineDir)
-		return nil
-	case "smb", "s3":
-		staging, err := datadir.Resolve(DefaultStagingDir)
-		if err != nil {
-			return fmt.Errorf("resolve bt staging dir: %w", err)
-		}
-		config.BT.EngineDir = staging
-		return nil
-	default:
-		return fmt.Errorf("bt.storage_backend type %q is unsupported", backend.Type)
-	}
-}
-
-func cleanConfigRelativePath(raw string) (string, error) {
-	raw = strings.ReplaceAll(raw, "\\", "/")
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "." {
-		return "", nil
-	}
-	if filepath.IsAbs(raw) || strings.HasPrefix(raw, "/") {
-		return "", errors.New("must be a relative path when bt.storage_backend is set")
-	}
-	for _, part := range strings.Split(raw, "/") {
-		if part == ".." {
-			return "", errors.New("must not contain '..'")
-		}
-	}
-	cleaned := pathCleanPOSIX(raw)
-	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-		return "", errors.New("must not escape storage root")
-	}
-	return cleaned, nil
-}
-
-func pathCleanPOSIX(raw string) string {
-	parts := strings.Split(raw, "/")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part == "" || part == "." {
-			continue
-		}
-		out = append(out, part)
-	}
-	return strings.Join(out, "/")
+	config.BT.DownloadDir = absolute
+	config.BT.EngineDir = absolute
+	return nil
 }
 
 func normalizeBTBlock(block *BTBlockConfig) error {

@@ -195,11 +195,11 @@ docker run --rm -it `
 - `bt.*`：下载引擎参数（部分可在 Web 设置页写回）
   - `bt.engine`：`anacrolix`（默认，进程内）或 `transmission`（RPC 连接 daemon）
   - `bt.transmission.url` / `username` / `password`：仅 `engine=transmission` 时需要
-  - `bt.storage_backend`：可选，默认存储后端名称；留空则使用本地文件系统
-  - `bt.download_dir`：未选后端时为相对 `DATA` 的本地路径（默认 `bt/downloads`）；选中后端时为该后端上的相对目录
+  - `bt.download_dir`：相对 `DATA` 的本地下载路径（默认 `bt/downloads`）
   - `bt.block`：屏蔽规则（客户端、Peer ID、端口、IP/CIDR）；Peers 列表右键可追加，支持热加载；`transmission` 引擎下客户端/Peer ID/端口规则不会在握手层强制生效
   - `POST /api/bt/block`：追加一条屏蔽规则并写回 YAML
 - `storage.backends[]`：按**名称**定义 local / smb / s3；密钥用 `${ENV}`
+  - Web「存储管理 → 同步」支持任意两个后端之间的双栏目录对比与复制（`POST /api/storage/sync/jobs`）
 - `dns.cloudflare.token` / `zones`：Cloudflare 连接与托管域名列表
 
 修改连接类配置后，可调用 `POST /api/system/reload-config`（需登录）热加载，无需
@@ -230,12 +230,10 @@ API Token 建议最小权限：
 可选删除下载数据。任务状态和文件选择保存在数据库中，服务重启后会自动恢复并续传。
 Web 管理接口均要求登录。
 
-无论引擎为何，SMB/S3 等远程存储仍走本地 staging → `SyncTask`；Transmission 只
-写入本地引擎目录。
+BT 仅下载到本机 `bt.download_dir`。跨存储复制请使用「存储管理 → 同步」双栏界面，
+在任意两个已配置后端之间对比目录并复制文件/文件夹。
 
-BT 任务状态、文件选择与同步进度保存在 SQLite；下载内容在磁盘上。添加任务时可
-选择配置中的存储后端名称；远程后端先写入本地 staging，再按 `complete` /
-`per_file` 策略同步。
+BT 任务状态与文件选择保存在 SQLite；下载内容在本地磁盘上。
 
 使用自定义配置文件：
 

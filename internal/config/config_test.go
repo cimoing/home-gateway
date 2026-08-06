@@ -104,36 +104,6 @@ bt:
 	}
 }
 
-func TestBTStorageBackendResolvesLocalEngineDir(t *testing.T) {
-	root := t.TempDir()
-	backendRoot := filepath.Join(root, "media")
-	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte(`
-bt:
-  storage_backend: local
-  download_dir: torrents
-storage:
-  backends:
-    - name: local
-      type: local
-      config:
-        root: "`+filepath.ToSlash(backendRoot)+`"
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := Load(configPath, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expected := filepath.Join(backendRoot, "torrents")
-	if config.BT.EngineDir != expected {
-		t.Fatalf("engine dir %q, want %q", config.BT.EngineDir, expected)
-	}
-	if config.BT.StoragePrefix != "torrents" || config.BT.StorageBackend != "local" {
-		t.Fatalf("unexpected bt storage fields: %+v", config.BT)
-	}
-}
-
 func TestExpandEnvRequiresPresentVariables(t *testing.T) {
 	t.Setenv("HOME_GATEWAY_TEST_SECRET", "s3cret")
 	value, err := ExpandEnv("prefix-${HOME_GATEWAY_TEST_SECRET}-suffix")

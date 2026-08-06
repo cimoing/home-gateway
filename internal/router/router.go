@@ -70,9 +70,6 @@ func newRouter(webFS http.FileSystem, services Services) *gin.Engine {
 			storage.NewHandler(services.Storage).Register(protected)
 		}
 		if services.BT != nil {
-			if services.Storage != nil {
-				services.BT.SetStorage(services.Storage)
-			}
 			bt.NewHandler(services.BT).Register(protected)
 		}
 		if services.Reload != nil {

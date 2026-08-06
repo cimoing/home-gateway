@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { BTFile } from './types'
-import { formatBytes, formatSyncProgress, syncStatusLabel } from './types'
+import { formatBytes } from './types'
 import {
   buildFileTree,
   collectFileIndexes,
@@ -91,22 +91,6 @@ function progressLabel(file: BTFile) {
   return `${((file.completedBytes / file.length) * 100).toFixed(1)}%`
 }
 
-function syncLabel(file: BTFile) {
-  const status = syncStatusLabel(file.syncStatus)
-  if (!status) return '—'
-  if (file.syncStatus === 'syncing' || file.syncStatus === 'pending') {
-    const detail = formatSyncProgress(file.syncedBytes, file.length)
-    return detail ? `${status} ${detail}` : status
-  }
-  if (file.syncStatus === 'synced') {
-    return status
-  }
-  if (file.syncStatus === 'error' && file.syncError) {
-    return `${status}: ${file.syncError}`
-  }
-  return status
-}
-
 type FlatRow =
   | { kind: 'dir'; node: FileTreeNode; depth: number; state: 'all' | 'none' | 'some' }
   | { kind: 'file'; node: FileTreeNode; depth: number; file: BTFile }
@@ -137,7 +121,6 @@ const rows = computed(() => {
           <th>文件</th>
           <th>大小</th>
           <th>进度</th>
-          <th>同步</th>
           <th>优先级</th>
         </tr>
       </thead>
@@ -185,10 +168,6 @@ const rows = computed(() => {
           </td>
           <td>
             <template v-if="row.kind === 'file'">{{ progressLabel(row.file) }}</template>
-            <template v-else>—</template>
-          </td>
-          <td class="content-cell">
-            <template v-if="row.kind === 'file'">{{ syncLabel(row.file) }}</template>
             <template v-else>—</template>
           </td>
           <td>

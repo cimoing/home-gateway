@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { reactive, ref } from 'vue'
 import { api } from '../../api/client'
 import type { BTSettings, BTTask } from './types'
 
-const props = defineProps<{ settings: BTSettings | null }>()
+defineProps<{ settings: BTSettings | null }>()
 const emit = defineEmits<{ added: [task: BTTask] }>()
 const source = ref<'magnet' | 'torrent'>('magnet')
 const file = ref<File | null>(null)
@@ -12,20 +12,8 @@ const error = ref('')
 const form = reactive({
   uri: '',
   subdirectory: '',
-  syncStrategy: 'complete',
   start: true,
 })
-
-const configuredBackend = computed(() => props.settings?.storageBackend || '')
-const showSyncStrategy = computed(() => !!configuredBackend.value)
-
-watch(
-  () => props.settings?.syncStrategy,
-  (strategy) => {
-    if (strategy) form.syncStrategy = strategy
-  },
-  { immediate: true },
-)
 
 function chooseFile(event: Event) {
   file.value = (event.target as HTMLInputElement).files?.[0] || null
@@ -36,16 +24,14 @@ async function submit() {
   error.value = ''
   try {
     let result: { task: BTTask }
-    const payload = {
-      uri: form.uri,
-      subdirectory: form.subdirectory,
-      syncStrategy: showSyncStrategy.value ? form.syncStrategy : '',
-      start: form.start,
-    }
     if (source.value === 'magnet') {
       result = await api('/api/bt/tasks/magnet', {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          uri: form.uri,
+          subdirectory: form.subdirectory,
+          start: form.start,
+        }),
       })
       form.uri = ''
     } else {
@@ -53,7 +39,6 @@ async function submit() {
       const body = new FormData()
       body.set('torrent', file.value)
       body.set('subdirectory', form.subdirectory)
-      if (showSyncStrategy.value) body.set('syncStrategy', form.syncStrategy)
       body.set('start', String(form.start))
       result = await api('/api/bt/tasks/torrent', { method: 'POST', body })
       file.value = null
@@ -71,7 +56,7 @@ async function submit() {
   <form class="panel bt-add-form" @submit.prevent="submit">
     <div class="panel-heading">
       <h2>添加下载任务</h2>
-      <p>支持磁力链接和最大 10 MiB 的 .torrent 文件。</p>
+      <p>支持磁力链接和最大 10 MiB 的 .torrent 文件。下载到本地目录；跨存储复制请使用「存储管理 → 同步」。</p>
     </div>
     <div class="source-switch">
       <button type="button" :class="{ active: source === 'magnet' }" @click="source = 'magnet'">
@@ -89,24 +74,10 @@ async function submit() {
       .torrent 文件
       <input type="file" accept=".torrent,application/x-bittorrent" required @change="chooseFile" />
     </label>
-    <p class="empty-state">
-      存储目标由配置 <code>bt.storage_backend</code> 决定
-      <template v-if="configuredBackend">（当前：{{ configuredBackend }}）</template>
-      <template v-else>（当前：本地文件系统）</template>
-      。
-    </p>
-    <label v-if="showSyncStrategy">
-      同步策略
-      <select v-model="form.syncStrategy">
-        <option value="complete">全部下载完毕后同步</option>
-        <option value="per_file">逐个同步（完成一个同步一个）</option>
-      </select>
-      <small>默认取自全局设置；此处选择会固化到本任务。</small>
-    </label>
     <label>
       目标子目录
       <input v-model="form.subdirectory" placeholder="例如 linux/isos（留空使用根目录）" />
-      <small>相对于配置中的下载目录。</small>
+      <small>相对于配置中的本地下载目录。</small>
     </label>
     <label class="checkbox-label">
       <input v-model="form.start" type="checkbox" />

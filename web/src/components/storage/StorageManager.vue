@@ -2,9 +2,10 @@
 import { onMounted, ref } from 'vue'
 import { api } from '../../api/client'
 import FileBrowser from './FileBrowser.vue'
+import SyncPanel from './SyncPanel.vue'
 import type { StorageBackend } from './types'
 
-type Tab = 'backends' | 'files'
+type Tab = 'backends' | 'files' | 'sync'
 const activeTab = ref<Tab>('backends')
 const backends = ref<StorageBackend[]>([])
 const busy = ref(false)
@@ -61,6 +62,7 @@ async function reloadConfig() {
     <nav class="tabs" aria-label="存储管理导航">
       <button :class="{ active: activeTab === 'backends' }" @click="activeTab = 'backends'">后端</button>
       <button :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">文件</button>
+      <button :class="{ active: activeTab === 'sync' }" @click="activeTab = 'sync'">同步</button>
     </nav>
     <p v-if="error" class="notice error-message" role="alert">{{ error }}</p>
     <p v-if="message" class="notice success-message">{{ message }}</p>
@@ -102,6 +104,10 @@ async function reloadConfig() {
     </section>
 
     <FileBrowser
+      v-else-if="activeTab === 'files'"
+      :backends="backends.filter((item) => item.enabled)"
+    />
+    <SyncPanel
       v-else
       :backends="backends.filter((item) => item.enabled)"
     />

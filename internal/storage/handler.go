@@ -34,6 +34,9 @@ func (h *Handler) Register(api *gin.RouterGroup) {
 	group.DELETE("/backends/:name/entries", h.removeEntry)
 	group.GET("/backends/:name/download", h.download)
 	group.POST("/backends/:name/upload", h.upload)
+	group.POST("/sync/jobs", h.startSyncJob)
+	group.GET("/sync/jobs/:jobID", h.getSyncJob)
+	group.POST("/sync/jobs/:jobID/cancel", h.cancelSyncJob)
 }
 
 func (h *Handler) listBackends(c *gin.Context) {
@@ -213,6 +216,39 @@ func (h *Handler) upload(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"path": filePath})
+}
+
+func (h *Handler) startSyncJob(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256*1024)
+	var request SyncJobRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid sync job request"})
+		return
+	}
+	job, err := h.service.StartSyncJob(c.Request.Context(), request)
+	if err != nil {
+		writeStorageError(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"job": job})
+}
+
+func (h *Handler) getSyncJob(c *gin.Context) {
+	job, err := h.service.GetSyncJob(c.Param("jobID"))
+	if err != nil {
+		writeStorageError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"job": job})
+}
+
+func (h *Handler) cancelSyncJob(c *gin.Context) {
+	job, err := h.service.CancelSyncJob(c.Param("jobID"))
+	if err != nil {
+		writeStorageError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"job": job})
 }
 
 func backendName(c *gin.Context) (string, bool) {

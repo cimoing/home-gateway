@@ -82,10 +82,7 @@ func (s *Service) Files(ctx context.Context, taskID int64) ([]model.BTTaskFile, 
 func (s *Service) enrichTask(ctx context.Context, task model.BTTask) model.BTTask {
 	if relative, err := s.config.RelativeTaskDir(task.SavePath); err == nil {
 		task.SaveSubdir = relative
-	} else if task.StoragePrefix != "" {
-		task.SaveSubdir = task.StoragePrefix
 	}
-	s.attachSyncProgress(ctx, &task)
 	runtime, ok := s.runtimeTask(task.InfoHash)
 	if !ok {
 		return task
@@ -117,11 +114,6 @@ func (s *Service) enrichTask(ctx context.Context, task model.BTTask) model.BTTas
 		eta := (task.TotalBytes - task.CompletedBytes) / task.DownloadRate
 		task.ETASeconds = &eta
 	}
-	if task.StorageBackend != "" &&
-		task.SyncStatus != model.BTSyncNone &&
-		task.SyncStrategy == model.BTSyncStrategyPerFile {
-		s.maybeEnqueuePerFileSyncs(ctx, task)
-	}
 	if task.TotalBytes > 0 && task.CompletedBytes >= task.TotalBytes &&
 		task.Status != model.BTStateCompleted {
 		task.Status = model.BTStateCompleted
@@ -133,13 +125,6 @@ func (s *Service) enrichTask(ctx context.Context, task model.BTTask) model.BTTas
 		_, _ = s.db.ExecContext(
 			ctx, query, model.BTStateCompleted, completedAt, completedAt, task.ID,
 		)
-		if task.SyncStatus == model.BTSyncPending || task.SyncStatus == model.BTSyncError {
-			if task.SyncStrategy == model.BTSyncStrategyPerFile {
-				s.maybeEnqueuePerFileSyncs(ctx, task)
-			} else {
-				s.enqueueSync(task.ID)
-			}
-		}
 	}
 	return task
 }
@@ -197,30 +182,4 @@ func (s *Service) runtimeTask(infoHash string) (EngineTask, bool) {
 		return nil, false
 	}
 	return s.engine.Task(infoHash)
-}
-
-func (s *Service) attachSyncProgress(ctx context.Context, task *model.BTTask) {
-	if task.StorageBackend == "" || task.SyncStatus == model.BTSyncNone {
-		return
-	}
-	var progress struct {
-		Synced int64 `db:"synced"`
-		Total  int64 `db:"total"`
-	}
-	query := s.db.Rebind(`
-		SELECT
-			COALESCE(SUM(CASE
-				WHEN NOT selected THEN 0
-				WHEN sync_status = 'synced' THEN length
-				ELSE synced_bytes
-			END), 0) AS synced,
-			COALESCE(SUM(CASE WHEN selected THEN length ELSE 0 END), 0) AS total
-		FROM bt_task_files
-		WHERE task_id = ?
-	`)
-	if err := s.db.GetContext(ctx, &progress, query, task.ID); err != nil {
-		return
-	}
-	task.SyncedBytes = progress.Synced
-	task.SyncTotalBytes = progress.Total
 }

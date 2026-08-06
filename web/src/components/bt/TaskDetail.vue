@@ -5,9 +5,6 @@ import type { BTFile, BTPeer, BTTask } from './types'
 import {
   formatBytes,
   formatRate,
-  formatSyncProgress,
-  syncStatusLabel,
-  syncStrategyLabel,
 } from './types'
 
 export type PeerBlockType = 'ip' | 'client' | 'port' | 'peerId'
@@ -246,26 +243,6 @@ onBeforeUnmount(() => {
               {{ task.ratio.toFixed(2) }}
               <span v-if="task.seedingPaused" class="seed-paused">已暂停做种</span>
             </dd>
-          </div>
-          <div v-if="task.syncStatus && task.syncStatus !== 'none'">
-            <dt>同步策略</dt>
-            <dd>{{ syncStrategyLabel(task.syncStrategy) }}</dd>
-          </div>
-          <div v-if="task.syncStatus && task.syncStatus !== 'none'">
-            <dt>同步状态</dt>
-            <dd>
-              {{ syncStatusLabel(task.syncStatus) || task.syncStatus }}
-              <span
-                v-if="formatSyncProgress(task.syncedBytes, task.syncTotalBytes)"
-                class="sync-progress"
-              >
-                {{ formatSyncProgress(task.syncedBytes, task.syncTotalBytes) }}
-              </span>
-            </dd>
-          </div>
-          <div v-if="task.syncError">
-            <dt>同步错误</dt>
-            <dd class="error-message">{{ task.syncError }}</dd>
           </div>
           <div>
             <dt>Peers</dt>

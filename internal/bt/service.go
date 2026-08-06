@@ -14,7 +14,6 @@ import (
 
 	appconfig "home-gateway/internal/config"
 	"home-gateway/internal/model"
-	"home-gateway/internal/storage"
 
 	"github.com/jmoiron/sqlx"
 )
@@ -36,17 +35,14 @@ type AddBlockRequest struct {
 
 // AddOptions controls the immutable storage location and initial state.
 type AddOptions struct {
-	Subdirectory   string `json:"subdirectory"`
-	StorageBackend string `json:"storageBackend"`
-	SyncStrategy   string `json:"syncStrategy"`
-	Start          bool   `json:"start"`
+	Subdirectory string `json:"subdirectory"`
+	Start        bool   `json:"start"`
 }
 
 // Settings is the runtime configuration exposed to the UI.
 type Settings struct {
 	Enabled          bool                    `json:"enabled"`
 	Engine           string                  `json:"engine"`
-	StorageBackend   string                  `json:"storageBackend"`
 	DownloadDir      string                  `json:"downloadDir"`
 	DownloadRoot     string                  `json:"downloadRoot"`
 	ListenPort       int                     `json:"listenPort"`
@@ -54,8 +50,6 @@ type Settings struct {
 	DownloadLimitBps int64                   `json:"downloadLimitBps"`
 	UploadLimitBps   int64                   `json:"uploadLimitBps"`
 	SeedRatioLimit   float64                 `json:"seedRatioLimit"`
-	SyncStrategy     string                  `json:"syncStrategy"`
-	SyncConcurrency  int                     `json:"syncConcurrency"`
 	Block            appconfig.BTBlockConfig `json:"block"`
 }
 
@@ -64,8 +58,6 @@ type UpdateSettingsRequest struct {
 	DownloadLimitBps *int64   `json:"downloadLimitBps"`
 	UploadLimitBps   *int64   `json:"uploadLimitBps"`
 	SeedRatioLimit   *float64 `json:"seedRatioLimit"`
-	SyncStrategy     *string  `json:"syncStrategy"`
-	SyncConcurrency  *int     `json:"syncConcurrency"`
 }
 
 // Status is the process-wide BT dashboard snapshot.
@@ -86,21 +78,18 @@ type rateSample struct {
 
 // Service persists task intent and coordinates the runtime engine.
 type Service struct {
-	db           *sqlx.DB
-	engine       Engine
-	storage      *storage.Service
-	config       appconfig.BTConfig
-	configPath   string
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	mu           sync.Mutex
-	samples      map[string]rateSample
-	peerSamples  map[string]rateSample
-	global       rateSample
-	seedPaused   map[string]bool
-	syncingFiles map[string]bool
-	activeSyncs  int
+	db          *sqlx.DB
+	engine      Engine
+	config      appconfig.BTConfig
+	configPath  string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	samples     map[string]rateSample
+	peerSamples map[string]rateSample
+	global      rateSample
+	seedPaused  map[string]bool
 }
 
 // NewService creates a BT task service. engine may be nil when disabled.
@@ -110,37 +99,20 @@ func NewService(
 	config appconfig.BTConfig,
 	configPath string,
 ) *Service {
-	return NewServiceWithStorage(db, engine, nil, config, configPath)
-}
-
-// NewServiceWithStorage creates a BT service with optional storage destinations.
-func NewServiceWithStorage(
-	db *sqlx.DB,
-	engine Engine,
-	storageService *storage.Service,
-	config appconfig.BTConfig,
-	configPath string,
-) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
-		db: db, engine: engine, storage: storageService,
+		db: db, engine: engine,
 		config: config, configPath: configPath,
 		ctx: ctx, cancel: cancel,
-		samples:      make(map[string]rateSample),
-		peerSamples:  make(map[string]rateSample),
-		seedPaused:   make(map[string]bool),
-		syncingFiles: make(map[string]bool),
+		samples:     make(map[string]rateSample),
+		peerSamples: make(map[string]rateSample),
+		seedPaused:  make(map[string]bool),
 	}
 	if engine != nil {
 		service.wg.Add(1)
 		go service.watchSeedRatio()
 	}
 	return service
-}
-
-// SetStorage attaches storage management after construction.
-func (s *Service) SetStorage(storageService *storage.Service) {
-	s.storage = storageService
 }
 
 // Settings returns safe runtime configuration.
@@ -150,7 +122,6 @@ func (s *Service) Settings() Settings {
 	return Settings{
 		Enabled:          s.config.Enabled,
 		Engine:           s.config.Engine,
-		StorageBackend:   s.config.StorageBackend,
 		DownloadDir:      s.config.DownloadDir,
 		DownloadRoot:     s.config.EngineDir,
 		ListenPort:       s.config.ListenPort,
@@ -158,8 +129,6 @@ func (s *Service) Settings() Settings {
 		DownloadLimitBps: s.config.DownloadLimitBps.Int64(),
 		UploadLimitBps:   s.config.UploadLimitBps.Int64(),
 		SeedRatioLimit:   s.config.SeedRatioLimit,
-		SyncStrategy:     s.config.SyncStrategy,
-		SyncConcurrency:  s.config.SyncConcurrency,
 		Block: appconfig.BTBlockConfig{
 			Clients:  append([]string(nil), s.config.Block.Clients...),
 			PeerIDs:  append([]string(nil), s.config.Block.PeerIDs...),
@@ -172,15 +141,11 @@ func (s *Service) Settings() Settings {
 // ApplyConfig updates mutable BT settings from a reloaded YAML file without restarting the engine.
 func (s *Service) ApplyConfig(config appconfig.BTConfig) {
 	s.mu.Lock()
-	s.config.StorageBackend = config.StorageBackend
 	s.config.DownloadDir = config.DownloadDir
 	s.config.EngineDir = config.EngineDir
-	s.config.StoragePrefix = config.StoragePrefix
 	s.config.DownloadLimitBps = config.DownloadLimitBps
 	s.config.UploadLimitBps = config.UploadLimitBps
 	s.config.SeedRatioLimit = config.SeedRatioLimit
-	s.config.SyncStrategy = config.SyncStrategy
-	s.config.SyncConcurrency = config.SyncConcurrency
 	s.config.Block = config.Block
 	downloadLimit := s.config.DownloadLimitBps.Int64()
 	uploadLimit := s.config.UploadLimitBps.Int64()
@@ -298,21 +263,6 @@ func (s *Service) UpdateSettings(request UpdateSettingsRequest) (Settings, error
 		}
 		s.config.SeedRatioLimit = *request.SeedRatioLimit
 	}
-	if request.SyncStrategy != nil {
-		strategy := strings.TrimSpace(strings.ToLower(*request.SyncStrategy))
-		if strategy != model.BTSyncStrategyComplete && strategy != model.BTSyncStrategyPerFile {
-			s.mu.Unlock()
-			return Settings{}, fmt.Errorf("%w: syncStrategy must be complete or per_file", ErrInvalidInput)
-		}
-		s.config.SyncStrategy = strategy
-	}
-	if request.SyncConcurrency != nil {
-		if *request.SyncConcurrency < 1 || *request.SyncConcurrency > 32 {
-			s.mu.Unlock()
-			return Settings{}, fmt.Errorf("%w: syncConcurrency must be between 1 and 32", ErrInvalidInput)
-		}
-		s.config.SyncConcurrency = *request.SyncConcurrency
-	}
 	btConfig := s.config
 	downloadLimit := s.config.DownloadLimitBps.Int64()
 	uploadLimit := s.config.UploadLimitBps.Int64()
@@ -400,13 +350,6 @@ func (s *Service) Restore(ctx context.Context) error {
 		}
 		runtime.Pause()
 		s.watchMetadata(task.ID, runtime)
-		if task.StorageBackend != "" && task.SyncStatus != model.BTSyncNone {
-			if task.SyncStrategy == model.BTSyncStrategyPerFile {
-				s.maybeEnqueuePerFileSyncs(ctx, task)
-			} else if task.Status == model.BTStateCompleted && task.SyncStatus == model.BTSyncPending {
-				s.enqueueSync(task.ID)
-			}
-		}
 	}
 	return nil
 }
@@ -424,8 +367,7 @@ func (s *Service) AddMagnet(
 	if !strings.HasPrefix(strings.ToLower(uri), "magnet:?") || len(uri) > 16384 {
 		return model.BTTask{}, fmt.Errorf("%w: invalid magnet URI", ErrInvalidInput)
 	}
-	taskKey := strconv.FormatInt(time.Now().UnixNano(), 36)
-	savePath, prefix, backendName, syncStatus, err := s.resolveDestination(ctx, options, taskKey)
+	savePath, err := s.resolveDestination(options.Subdirectory)
 	if err != nil {
 		return model.BTTask{}, err
 	}
@@ -440,10 +382,6 @@ func (s *Service) AddMagnet(
 		uri,
 		nil,
 		savePath,
-		prefix,
-		backendName,
-		syncStatus,
-		s.resolveSyncStrategy(options.SyncStrategy),
 		options.Start,
 	)
 	if err != nil {
@@ -467,8 +405,7 @@ func (s *Service) AddTorrent(
 	if len(data) == 0 || len(data) > 10<<20 {
 		return model.BTTask{}, fmt.Errorf("%w: torrent file must be 1 byte to 10 MiB", ErrInvalidInput)
 	}
-	taskKey := strconv.FormatInt(time.Now().UnixNano(), 36)
-	savePath, prefix, backendName, syncStatus, err := s.resolveDestination(ctx, options, taskKey)
+	savePath, err := s.resolveDestination(options.Subdirectory)
 	if err != nil {
 		return model.BTTask{}, err
 	}
@@ -483,10 +420,6 @@ func (s *Service) AddTorrent(
 		"",
 		data,
 		savePath,
-		prefix,
-		backendName,
-		syncStatus,
-		s.resolveSyncStrategy(options.SyncStrategy),
 		options.Start,
 	)
 	if err != nil {
@@ -505,21 +438,11 @@ func (s *Service) insertTask(
 	sourceValue string,
 	metainfo []byte,
 	savePath string,
-	storagePrefix string,
-	storageBackend string,
-	syncStatus string,
-	syncStrategy string,
 	start bool,
 ) (model.BTTask, error) {
 	desired := model.BTStatePaused
 	if start {
 		desired = model.BTStateDownloading
-	}
-	if syncStatus == "" {
-		syncStatus = model.BTSyncNone
-	}
-	if syncStrategy == "" {
-		syncStrategy = model.BTSyncStrategyComplete
 	}
 	var count int
 	countQuery := s.db.Rebind(`SELECT COUNT(*) FROM bt_tasks WHERE info_hash = ?`)
@@ -539,7 +462,7 @@ func (s *Service) insertTask(
 	`)
 	if _, err := s.db.ExecContext(
 		ctx, query, infoHash, sourceType, sourceValue, metainfo, "", savePath,
-		storageBackend, storagePrefix, syncStrategy, syncStatus, "",
+		"", "", "", model.BTSyncNone, "",
 		desired, model.BTStateMetadata, now, now,
 	); err != nil {
 		return model.BTTask{}, fmt.Errorf("insert BT task: %w", err)
@@ -575,15 +498,10 @@ func (s *Service) applyMetadata(ctx context.Context, taskID int64, runtime Engin
 
 	var taskMeta struct {
 		DesiredState string `db:"desired_state"`
-		SyncStatus   string `db:"sync_status"`
 	}
-	queryMeta := tx.Rebind(`SELECT desired_state, sync_status FROM bt_tasks WHERE id = ?`)
+	queryMeta := tx.Rebind(`SELECT desired_state FROM bt_tasks WHERE id = ?`)
 	if err := tx.GetContext(ctx, &taskMeta, queryMeta, taskID); err != nil {
 		return mapTaskNotFound(err)
-	}
-	fileSyncStatus := model.BTSyncNone
-	if taskMeta.SyncStatus != model.BTSyncNone {
-		fileSyncStatus = model.BTSyncPending
 	}
 
 	var existing []model.BTTaskFile
@@ -611,7 +529,7 @@ func (s *Service) applyMetadata(ctx context.Context, taskID int64, runtime Engin
 			`)
 			if _, err := tx.ExecContext(
 				ctx, insert, taskID, file.Index, file.Path, file.Length, true, 1,
-				fileSyncStatus, "",
+				model.BTSyncNone, "",
 			); err != nil {
 				return fmt.Errorf("insert BT task file: %w", err)
 			}

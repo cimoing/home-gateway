@@ -115,13 +115,6 @@ async function control(task: BTTask, action: 'pause' | 'resume') {
   }, action === 'pause' ? '任务已暂停。' : '任务已恢复。')
 }
 
-async function syncTask(task: BTTask) {
-  await run(async () => {
-    await api(`/api/bt/tasks/${task.id}/sync`, { method: 'POST' })
-    await loadTasks()
-  }, '已触发同步到存储后端。')
-}
-
 async function removeTask(task: BTTask) {
   if (!confirm(`确定从任务列表删除“${task.name || task.infoHash}”？`)) return
   const deleteData = confirm('是否同时删除已下载的数据？取消将保留文件。')
@@ -161,8 +154,6 @@ async function saveSettings(payload: {
   downloadLimitBps: number
   uploadLimitBps: number
   seedRatioLimit: number
-  syncStrategy: string
-  syncConcurrency: number
 }) {
   await run(async () => {
     const data = await api<{ settings: BTSettings }>('/api/bt/settings', {
@@ -219,7 +210,6 @@ function taskAdded(task: BTTask) {
         @select="selectTask"
         @pause="control($event, 'pause')"
         @resume="control($event, 'resume')"
-        @sync="syncTask"
         @remove="removeTask"
       />
     </template>

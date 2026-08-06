@@ -15,13 +15,6 @@ export interface BTTask {
   peers: number
   ratio: number
   seedingPaused?: boolean
-  storageBackend?: string
-  storagePrefix?: string
-  syncStrategy?: string
-  syncStatus?: string
-  syncError?: string
-  syncedBytes?: number
-  syncTotalBytes?: number
   etaSeconds?: number
   createdAt: string
 }
@@ -34,9 +27,6 @@ export interface BTFile {
   length: number
   selected: boolean
   priority: number
-  syncStatus?: string
-  syncError?: string
-  syncedBytes?: number
   completedBytes: number
 }
 
@@ -63,7 +53,6 @@ export interface BTBlockConfig {
 export interface BTSettings {
   enabled: boolean
   engine?: string
-  storageBackend?: string
   downloadDir?: string
   downloadRoot: string
   listenPort: number
@@ -71,8 +60,6 @@ export interface BTSettings {
   downloadLimitBps: number
   uploadLimitBps: number
   seedRatioLimit: number
-  syncStrategy: string
-  syncConcurrency: number
   block?: BTBlockConfig
 }
 
@@ -101,40 +88,4 @@ export function formatDuration(seconds?: number) {
   if (seconds < 60) return `${seconds} 秒`
   if (seconds < 3600) return `${Math.ceil(seconds / 60)} 分钟`
   return `${Math.floor(seconds / 3600)} 小时 ${Math.ceil((seconds % 3600) / 60)} 分钟`
-}
-
-export function syncStatusLabel(status?: string) {
-  switch (status) {
-    case 'pending':
-      return '待同步'
-    case 'syncing':
-      return '同步中'
-    case 'synced':
-      return '已同步'
-    case 'error':
-      return '同步失败'
-    default:
-      return ''
-  }
-}
-
-export function syncStrategyLabel(strategy?: string) {
-  switch (strategy) {
-    case 'per_file':
-      return '逐文件同步'
-    case 'complete':
-      return '全部完成后同步'
-    default:
-      return strategy || '—'
-  }
-}
-
-export function syncProgressPercent(synced = 0, total = 0) {
-  if (!total || total <= 0) return 0
-  return Math.min(100, (synced / total) * 100)
-}
-
-export function formatSyncProgress(synced = 0, total = 0) {
-  if (!total || total <= 0) return ''
-  return `${formatBytes(synced)} / ${formatBytes(total)}（${syncProgressPercent(synced, total).toFixed(1)}%）`
 }

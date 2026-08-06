@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -29,11 +28,15 @@ type BackendView struct {
 type Service struct {
 	mu       sync.RWMutex
 	backends map[string]config.StorageBackendConfig
+	syncJobs *SyncJobs
 }
 
 // NewService creates a storage service from YAML backends.
 func NewService(backends []config.StorageBackendConfig) *Service {
-	service := &Service{backends: make(map[string]config.StorageBackendConfig)}
+	service := &Service{
+		backends: make(map[string]config.StorageBackendConfig),
+		syncJobs: NewSyncJobs(),
+	}
 	service.Replace(backends)
 	return service
 }
@@ -155,53 +158,22 @@ func (s *Service) CreateFile(_ context.Context, name string, _ string) (Backend,
 	return s.open(name)
 }
 
-// ResolveForBT returns save path and sync metadata for a BT task destination.
-func (s *Service) ResolveForBT(
-	_ context.Context,
-	backendName string,
-	prefix string,
-	stagingRoot string,
-	taskKey string,
-) (savePath string, syncStatus string, backendType string, err error) {
-	row, err := s.getConfig(backendName)
-	if err != nil {
-		return "", "", "", err
-	}
-	if row.Enabled != nil && !*row.Enabled {
-		return "", "", "", fmt.Errorf("%w: storage backend is disabled", ErrUnavailable)
-	}
-	cleanedPrefix, err := cleanRelativePath(prefix)
-	if err != nil {
-		return "", "", "", fmt.Errorf("%w: invalid storage prefix", ErrInvalidInput)
-	}
-	switch strings.ToLower(row.Type) {
-	case model.StorageTypeLocal:
-		root := filepath.Clean(stringConfig(row.Config, "root"))
-		if root == "" || !filepath.IsAbs(root) {
-			return "", "", "", fmt.Errorf("%w: invalid local config", ErrInvalidInput)
-		}
-		savePath = root
-		if cleanedPrefix != "" {
-			savePath = filepath.Join(root, filepath.FromSlash(cleanedPrefix))
-		}
-		if !isWithinRoot(root, savePath) {
-			return "", "", "", ErrInvalidInput
-		}
-		return savePath, model.BTSyncNone, row.Type, nil
-	case model.StorageTypeSMB, model.StorageTypeS3:
-		savePath = filepath.Join(
-			filepath.Clean(stagingRoot),
-			".storage",
-			sanitizeName(backendName),
-			taskKey,
-		)
-		return savePath, model.BTSyncPending, row.Type, nil
-	default:
-		return "", "", "", fmt.Errorf("%w: unsupported storage type", ErrInvalidInput)
-	}
+// StartSyncJob copies files/directories between two backends asynchronously.
+func (s *Service) StartSyncJob(ctx context.Context, request SyncJobRequest) (SyncJobStatus, error) {
+	return s.syncJobs.Start(ctx, s, request)
 }
 
-// OpenByName opens a backend for sync/file operations by name.
+// GetSyncJob returns progress for a previously started sync job.
+func (s *Service) GetSyncJob(id string) (SyncJobStatus, error) {
+	return s.syncJobs.Get(id)
+}
+
+// CancelSyncJob requests cancellation of a running sync job.
+func (s *Service) CancelSyncJob(id string) (SyncJobStatus, error) {
+	return s.syncJobs.Cancel(id)
+}
+
+// OpenByName opens a backend for file operations by name.
 func (s *Service) OpenByName(_ context.Context, name string) (Backend, error) {
 	return s.open(name)
 }
@@ -241,10 +213,4 @@ func (s *Service) toView(backend config.StorageBackendConfig) BackendView {
 		},
 		Config: PublicConfig(backend),
 	}
-}
-
-func sanitizeName(name string) string {
-	name = strings.TrimSpace(name)
-	replacer := strings.NewReplacer("/", "_", "\\", "_", "..", "_", " ", "_")
-	return replacer.Replace(name)
 }
