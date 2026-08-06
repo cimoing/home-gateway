@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"path"
 	"strings"
 	"sync"
@@ -151,15 +152,22 @@ func (m *SyncJobs) Cancel(id string) (SyncJobStatus, error) {
 }
 
 func (m *SyncJobs) run(ctx context.Context, service *Service, job *syncJob, request SyncJobRequest) {
+	started := time.Now()
+	log.Printf(
+		"storage copy job=%s start src=%s dst=%s items=%d overwrite=%v",
+		job.id, request.SourceBackend, request.DestBackend, len(request.Items), request.Overwrite,
+	)
 	job.setStatus(syncJobRunning, "")
 	src, err := service.open(request.SourceBackend)
 	if err != nil {
+		log.Printf("storage copy job=%s failed open src=%s err=%v", job.id, request.SourceBackend, err)
 		job.setStatus(syncJobFailed, err.Error())
 		return
 	}
 	defer src.Close()
 	dst, err := service.open(request.DestBackend)
 	if err != nil {
+		log.Printf("storage copy job=%s failed open dst=%s err=%v", job.id, request.DestBackend, err)
 		job.setStatus(syncJobFailed, err.Error())
 		return
 	}
@@ -167,6 +175,7 @@ func (m *SyncJobs) run(ctx context.Context, service *Service, job *syncJob, requ
 
 	plan, err := buildCopyPlan(ctx, src, request.Items)
 	if err != nil {
+		log.Printf("storage copy job=%s failed plan err=%v", job.id, err)
 		job.setStatus(syncJobFailed, err.Error())
 		return
 	}
@@ -179,18 +188,35 @@ func (m *SyncJobs) run(ctx context.Context, service *Service, job *syncJob, requ
 	job.totalBytes = totalBytes
 	job.updatedAt = time.Now().UTC()
 	job.mu.Unlock()
+	log.Printf(
+		"storage copy job=%s planned files=%d bytes=%s",
+		job.id, len(plan), formatByteSize(totalBytes),
+	)
 
-	for _, step := range plan {
+	for index, step := range plan {
 		if ctx.Err() != nil {
+			log.Printf("storage copy job=%s canceled after %d/%d", job.id, index, len(plan))
 			job.setStatus(syncJobCanceled, "canceled")
 			return
 		}
 		job.setCurrent(step.destPath)
+		log.Printf(
+			"storage copy job=%s %d/%d src=%s:%s dst=%s:%s size=%s",
+			job.id, index+1, len(plan),
+			request.SourceBackend, step.sourcePath,
+			request.DestBackend, step.destPath,
+			formatByteSize(step.size),
+		)
+		fileStarted := time.Now()
 		if err := copyOneFile(ctx, src, dst, step.sourcePath, step.destPath, step.size, request.Overwrite, job); err != nil {
 			job.mu.Lock()
 			job.failedFiles++
 			job.updatedAt = time.Now().UTC()
 			job.mu.Unlock()
+			log.Printf(
+				"storage copy job=%s failed src=%s:%s dst=%s:%s err=%v",
+				job.id, request.SourceBackend, step.sourcePath, request.DestBackend, step.destPath, err,
+			)
 			job.setStatus(syncJobFailed, fmt.Sprintf("%s: %v", step.sourcePath, err))
 			return
 		}
@@ -198,7 +224,16 @@ func (m *SyncJobs) run(ctx context.Context, service *Service, job *syncJob, requ
 		job.copiedFiles++
 		job.updatedAt = time.Now().UTC()
 		job.mu.Unlock()
+		log.Printf(
+			"storage copy job=%s copied src=%s:%s dst=%s:%s size=%s elapsed=%s",
+			job.id, request.SourceBackend, step.sourcePath, request.DestBackend, step.destPath,
+			formatByteSize(step.size), time.Since(fileStarted).Round(time.Millisecond),
+		)
 	}
+	log.Printf(
+		"storage copy job=%s done files=%d bytes=%s elapsed=%s",
+		job.id, len(plan), formatByteSize(totalBytes), time.Since(started).Round(time.Millisecond),
+	)
 	job.setStatus(syncJobCompleted, "")
 }
 
@@ -232,8 +267,7 @@ func buildCopyPlan(ctx context.Context, src Backend, items []SyncItem) ([]copySt
 			return nil, err
 		}
 		for _, file := range files {
-			rel := strings.TrimPrefix(file.path, sourcePath)
-			rel = strings.TrimPrefix(rel, "/")
+			rel := relativeUnder(sourcePath, file.path)
 			target := destPath
 			if rel != "" {
 				target = path.Join(destPath, rel)
@@ -242,31 +276,6 @@ func buildCopyPlan(ctx context.Context, src Backend, items []SyncItem) ([]copySt
 		}
 	}
 	return steps, nil
-}
-
-type listedFile struct {
-	path string
-	size int64
-}
-
-func listFilesRecursive(ctx context.Context, backend Backend, dir string) ([]listedFile, error) {
-	entries, err := backend.List(ctx, dir)
-	if err != nil {
-		return nil, err
-	}
-	files := make([]listedFile, 0)
-	for _, entry := range entries {
-		if entry.IsDir {
-			nested, err := listFilesRecursive(ctx, backend, entry.Path)
-			if err != nil {
-				return nil, err
-			}
-			files = append(files, nested...)
-			continue
-		}
-		files = append(files, listedFile{path: entry.Path, size: entry.Size})
-	}
-	return files, nil
 }
 
 func copyOneFile(
@@ -314,7 +323,9 @@ func copyOneFile(
 				return writeErr
 			}
 			written += int64(n)
-			job.addBytes(int64(n))
+			if job != nil {
+				job.addBytes(int64(n))
+			}
 		}
 		if readErr == io.EOF {
 			break

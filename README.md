@@ -200,6 +200,7 @@ docker run --rm -it `
   - `POST /api/bt/block`：追加一条屏蔽规则并写回 YAML
 - `storage.backends[]`：按**名称**定义 local / smb / s3；密钥用 `${ENV}`
   - Web「存储管理 → 同步」支持任意两个后端之间的双栏目录对比与复制（`POST /api/storage/sync/jobs`）
+  - `storage.sync[]`：定时增量同步（crontab `interval` + `src`/`dst`）；页面可查看规则列表并以「立即同步」手动触发（`GET/POST /api/storage/sync/schedules`）
 - `dns.cloudflare.token` / `zones`：Cloudflare 连接与托管域名列表
 
 修改连接类配置后，可调用 `POST /api/system/reload-config`（需登录）热加载，无需

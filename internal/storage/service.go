@@ -26,9 +26,10 @@ type BackendView struct {
 
 // Service manages config-backed storage backends and file operations.
 type Service struct {
-	mu       sync.RWMutex
-	backends map[string]config.StorageBackendConfig
-	syncJobs *SyncJobs
+	mu        sync.RWMutex
+	backends  map[string]config.StorageBackendConfig
+	syncJobs  *SyncJobs
+	scheduler *Scheduler
 }
 
 // NewService creates a storage service from YAML backends.
@@ -39,6 +40,37 @@ func NewService(backends []config.StorageBackendConfig) *Service {
 	}
 	service.Replace(backends)
 	return service
+}
+
+// SetScheduler attaches the cron scheduler used for storage.sync rules.
+func (s *Service) SetScheduler(scheduler *Scheduler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scheduler = scheduler
+}
+
+func (s *Service) getScheduler() *Scheduler {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.scheduler
+}
+
+// ListSyncSchedules returns configured storage.sync rules.
+func (s *Service) ListSyncSchedules() []ScheduleView {
+	scheduler := s.getScheduler()
+	if scheduler == nil {
+		return []ScheduleView{}
+	}
+	return scheduler.List()
+}
+
+// TriggerSyncSchedule starts one configured rule immediately.
+func (s *Service) TriggerSyncSchedule(id int) (ScheduleView, error) {
+	scheduler := s.getScheduler()
+	if scheduler == nil {
+		return ScheduleView{}, fmt.Errorf("%w: sync scheduler is not running", ErrUnavailable)
+	}
+	return scheduler.Trigger(id)
 }
 
 // Replace atomically reloads backends from configuration.

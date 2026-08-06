@@ -8,7 +8,7 @@ COPY --from=node /usr/local/ /usr/local/
 
 WORKDIR /workspace
 
-RUN mkdir -p /config /data/db /data/bt/downloads /data/bt/.staging
+RUN mkdir -p /config /data/db /data/bt/downloads
 
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \

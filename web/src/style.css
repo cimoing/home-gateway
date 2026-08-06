@@ -701,6 +701,12 @@ button.linkish {
   font-size: 12px;
 }
 
+.muted-note {
+  margin-top: 4px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
 .sync-progress {
   display: inline-block;
   margin-left: 8px;

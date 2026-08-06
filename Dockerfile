@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags="-s -w" \
       -o /out/home-gateway \
       ./cmd/server && \
-    mkdir -p /out/config /out/data/db /out/data/bt/downloads /out/data/bt/.staging && \
+    mkdir -p /out/config /out/data/db /out/data/bt/downloads && \
     touch /out/data/.keep /out/config/.keep
 
 FROM gcr.io/distroless/static-debian12:nonroot

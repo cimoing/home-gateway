@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { api } from '../../api/client'
 import FileBrowser from './FileBrowser.vue'
+import ScheduleList from './ScheduleList.vue'
 import SyncPanel from './SyncPanel.vue'
 import type { StorageBackend } from './types'
 
@@ -107,9 +108,9 @@ async function reloadConfig() {
       v-else-if="activeTab === 'files'"
       :backends="backends.filter((item) => item.enabled)"
     />
-    <SyncPanel
-      v-else
-      :backends="backends.filter((item) => item.enabled)"
-    />
+    <template v-else>
+      <ScheduleList />
+      <SyncPanel :backends="backends.filter((item) => item.enabled)" />
+    </template>
   </section>
 </template>

@@ -12,6 +12,7 @@ import (
 	"home-gateway/internal/datadir"
 
 	"github.com/goccy/go-yaml"
+	"github.com/robfig/cron/v3"
 )
 
 const (
@@ -67,6 +68,22 @@ type BTBlockConfig struct {
 // StorageConfig holds named storage backends from YAML.
 type StorageConfig struct {
 	Backends []StorageBackendConfig `yaml:"backends" json:"backends"`
+	// Sync lists scheduled incremental copy jobs between backends.
+	Sync []StorageSyncRule `yaml:"sync" json:"sync"`
+}
+
+// StorageSyncRule is one cron-scheduled incremental sync from src to dst.
+type StorageSyncRule struct {
+	Interval string                `yaml:"interval" json:"interval"`
+	Src      StorageSyncEndpoint   `yaml:"src" json:"src"`
+	Dst      StorageSyncEndpoint   `yaml:"dst" json:"dst"`
+	Enabled  *bool                 `yaml:"enabled" json:"enabled"`
+}
+
+// StorageSyncEndpoint names a backend and relative directory/file path.
+type StorageSyncEndpoint struct {
+	Name string `yaml:"name" json:"name"`
+	Path string `yaml:"path" json:"path"`
 }
 
 // StorageBackendConfig is one named destination.
@@ -356,7 +373,74 @@ func expandStorage(storage StorageConfig) (StorageConfig, error) {
 			backend.Secret = expanded
 		}
 	}
+	rules := make([]StorageSyncRule, 0, len(storage.Sync))
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+	for index := range storage.Sync {
+		rule := storage.Sync[index]
+		rule.Interval = strings.TrimSpace(rule.Interval)
+		rule.Src.Name = strings.TrimSpace(rule.Src.Name)
+		rule.Dst.Name = strings.TrimSpace(rule.Dst.Name)
+		srcPath, err := cleanSyncPath(rule.Src.Path)
+		if err != nil {
+			return StorageConfig{}, fmt.Errorf("storage.sync[%d].src.path: %w", index, err)
+		}
+		dstPath, err := cleanSyncPath(rule.Dst.Path)
+		if err != nil {
+			return StorageConfig{}, fmt.Errorf("storage.sync[%d].dst.path: %w", index, err)
+		}
+		rule.Src.Path = srcPath
+		rule.Dst.Path = dstPath
+		if rule.Interval == "" {
+			return StorageConfig{}, fmt.Errorf("storage.sync[%d].interval is required", index)
+		}
+		if _, err := parser.Parse(rule.Interval); err != nil {
+			return StorageConfig{}, fmt.Errorf("storage.sync[%d].interval: %w", index, err)
+		}
+		if rule.Src.Name == "" || rule.Dst.Name == "" {
+			return StorageConfig{}, fmt.Errorf("storage.sync[%d]: src.name and dst.name are required", index)
+		}
+		if _, ok := seen[rule.Src.Name]; !ok {
+			return StorageConfig{}, fmt.Errorf("storage.sync[%d].src.name %q is not defined in storage.backends", index, rule.Src.Name)
+		}
+		if _, ok := seen[rule.Dst.Name]; !ok {
+			return StorageConfig{}, fmt.Errorf("storage.sync[%d].dst.name %q is not defined in storage.backends", index, rule.Dst.Name)
+		}
+		if rule.Src.Name == rule.Dst.Name && rule.Src.Path == rule.Dst.Path {
+			return StorageConfig{}, fmt.Errorf("storage.sync[%d]: src and dst must differ", index)
+		}
+		enabled := true
+		if rule.Enabled != nil {
+			enabled = *rule.Enabled
+		}
+		rule.Enabled = &enabled
+		rules = append(rules, rule)
+	}
+	storage.Sync = rules
 	return storage, nil
+}
+
+func cleanSyncPath(raw string) (string, error) {
+	raw = strings.ReplaceAll(raw, "\\", "/")
+	raw = strings.Trim(strings.TrimSpace(raw), "/")
+	if raw == "" || raw == "." {
+		return "", nil
+	}
+	for _, part := range strings.Split(raw, "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			return "", errors.New("must not contain '..'")
+		}
+	}
+	parts := make([]string, 0)
+	for _, part := range strings.Split(raw, "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "/"), nil
 }
 
 func expandDNS(dns DNSConfig) (DNSConfig, error) {

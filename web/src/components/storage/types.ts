@@ -39,11 +39,52 @@ export interface SyncCompareRow {
   status: 'left_only' | 'right_only' | 'same' | 'different' | 'both'
 }
 
+export interface SyncEndpoint {
+  name: string
+  path: string
+}
+
+export interface SyncSchedule {
+  id: number
+  interval: string
+  enabled: boolean
+  src: SyncEndpoint
+  dst: SyncEndpoint
+  running: boolean
+  lastStatus?: string
+  lastError?: string
+  lastScanned: number
+  lastCopied: number
+  lastSkipped: number
+  lastBytes: number
+  lastStartedAt?: string
+  lastFinishedAt?: string
+}
+
 export function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '0 B'
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
   const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
   return `${(value / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`
+}
+
+export function formatEndpoint(endpoint?: SyncEndpoint) {
+  if (!endpoint?.name) return '—'
+  const path = endpoint.path?.trim()
+  return path ? `${endpoint.name}:${path}` : `${endpoint.name}:/`
+}
+
+export function scheduleStatusLabel(status?: string) {
+  switch (status) {
+    case 'running':
+      return '进行中'
+    case 'completed':
+      return '已完成'
+    case 'failed':
+      return '失败'
+    default:
+      return status || '—'
+  }
 }
 
 export function syncJobLabel(status?: string) {

@@ -5,11 +5,8 @@ const (
 	StorageTypeSMB   = "smb"
 	StorageTypeS3    = "s3"
 
-	BTSyncNone    = "none"
-	BTSyncPending = "pending"
-	BTSyncSyncing = "syncing"
-	BTSyncSynced  = "synced"
-	BTSyncError   = "error"
+	// BTSyncNone is written to legacy bt_* sync columns (feature removed).
+	BTSyncNone = "none"
 )
 
 // StorageBackend is a configured storage destination (from YAML).

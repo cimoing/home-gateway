@@ -115,6 +115,68 @@ func TestExpandEnvRequiresPresentVariables(t *testing.T) {
 	}
 }
 
+func TestStorageSyncRulesValidated(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DATA", root)
+	backendRoot := filepath.Join(root, "media")
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+storage:
+  backends:
+    - name: local
+      type: local
+      config:
+        root: "`+filepath.ToSlash(backendRoot)+`"
+    - name: archive
+      type: local
+      config:
+        root: "`+filepath.ToSlash(filepath.Join(root, "archive"))+`"
+  sync:
+    - interval: "0 */6 * * *"
+      src:
+        name: local
+        path: movies
+      dst:
+        name: archive
+        path: backup/movies
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Load(configPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Storage.Sync) != 1 {
+		t.Fatalf("sync rules %#v", config.Storage.Sync)
+	}
+	rule := config.Storage.Sync[0]
+	if rule.Interval != "0 */6 * * *" || rule.Src.Path != "movies" || rule.Dst.Path != "backup/movies" {
+		t.Fatalf("rule %#v", rule)
+	}
+	if rule.Enabled == nil || !*rule.Enabled {
+		t.Fatal("expected enabled default true")
+	}
+
+	badPath := filepath.Join(root, "bad.yaml")
+	if err := os.WriteFile(badPath, []byte(`
+storage:
+  backends:
+    - name: local
+      type: local
+      config:
+        root: "`+filepath.ToSlash(backendRoot)+`"
+  sync:
+    - interval: "not a cron"
+      src: { name: local, path: "" }
+      dst: { name: local, path: other }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(badPath, true); err == nil {
+		t.Fatal("expected invalid cron to fail")
+	}
+}
+
 func TestLoadStorageAndDNSConfig(t *testing.T) {
 	t.Setenv("CF_API_TOKEN", "cf-token")
 	root := t.TempDir()

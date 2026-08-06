@@ -93,6 +93,12 @@ func runServer(cmd *cobra.Command) error {
 		}
 	}
 	storageService := storage.NewService(config.Storage.Backends)
+	syncScheduler := storage.NewScheduler(storageService)
+	storageService.SetScheduler(syncScheduler)
+	if err := syncScheduler.Replace(config.Storage.Sync); err != nil {
+		return fmt.Errorf("start storage sync scheduler: %w", err)
+	}
+	defer syncScheduler.Stop()
 	dnsService := dns.NewService(config.DNS.Cloudflare)
 	btService := bt.NewService(db, engine, config.BT, configPath)
 	defer func() {
@@ -110,6 +116,9 @@ func runServer(cmd *cobra.Command) error {
 			return err
 		}
 		storageService.Replace(reloaded.Storage.Backends)
+		if err := syncScheduler.Replace(reloaded.Storage.Sync); err != nil {
+			return err
+		}
 		dnsService.Replace(reloaded.DNS.Cloudflare)
 		btService.ApplyConfig(reloaded.BT)
 		log.Printf("configuration reloaded from %s", configPath)

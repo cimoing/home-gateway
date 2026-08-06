@@ -1,40 +1,27 @@
 bt:
   enabled: true
-  # Engine: anacrolix (embedded, default) or transmission (RPC to transmission-daemon).
+  # Engine: anacrolix (default) or transmission.
   # engine: anacrolix
-  # When engine=transmission, peer listen port and download root are applied via RPC.
   # transmission:
   #   url: http://127.0.0.1:9091/transmission/rpc
-  #   # Docker Compose profile: http://transmission:9091/transmission/rpc
+  #   # Docker Compose: http://transmission:9091/transmission/rpc
   #   username: ""
   #   password: ${TRANSMISSION_RPC_PASSWORD}
-  # Local download directory relative to DATA (default "." / container "/data").
+  # Relative to DATA (default "." / container "/data").
   download_dir: bt/downloads
   listen_port: 42069
-  # 0 = unlimited. Accepts bytes/s or human rates: 512K, 10M, 1G (binary units).
+  # 0 = unlimited. Human rates: 512K, 10M, 1G.
   download_limit_bps: 0
   upload_limit_bps: 0
-  # 0 = disabled; pause seeding when share ratio reaches this value
+  # 0 = disabled; pause seeding when share ratio reaches this value.
   seed_ratio_limit: 0
-  # Peer blocklist (hot-reloadable via POST /api/system/reload-config)
-  # With engine=transmission, client/peer-id/port rules are not enforced by the daemon;
-  # IP/CIDR denial needs Transmission's own blocklist.
-  block:
-    clients: []
-    # clients:
-    #   - Xunlei
-    #   - XL
-    #   - qBittorrent
-    peer_ids: []
-    # peer_ids:
-    #   - "-qB4500-........"
-    ports: []
-    # ports:
-    #   - 6881
-    networks: []
-    # networks:
-    #   - 203.0.113.0/24
-    #   - 198.51.100.10
+  # Peer blocklist (hot-reloadable). client/peer-id/port rules need anacrolix;
+  # transmission only stores them (use daemon blocklist for IP denial).
+  # block:
+  #   clients: [Xunlei, XL]
+  #   peer_ids: ["-qB4500-........"]
+  #   ports: [6881]
+  #   networks: [203.0.113.0/24, 198.51.100.10]
 
 storage:
   backends:
@@ -61,6 +48,23 @@ storage:
     #     access_key_id: ${S3_ACCESS_KEY}
     #     force_path_style: true
     #   secret: ${S3_SECRET_KEY}
+  # Scheduled incremental sync (cron). Copies when size differs or source mtime is newer.
+  # sync:
+  #   - interval: "0 */6 * * *"
+  #     src:
+  #       name: local
+  #       path: movies
+  #     dst:
+  #       name: nas
+  #       path: media/movies
+  #   - interval: "30 2 * * *"
+  #     enabled: true
+  #     src:
+  #       name: local
+  #       path: ""
+  #     dst:
+  #       name: archive
+  #       path: gateway-backup
 
 dns:
   cloudflare:

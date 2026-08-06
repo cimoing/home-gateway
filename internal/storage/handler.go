@@ -37,6 +37,8 @@ func (h *Handler) Register(api *gin.RouterGroup) {
 	group.POST("/sync/jobs", h.startSyncJob)
 	group.GET("/sync/jobs/:jobID", h.getSyncJob)
 	group.POST("/sync/jobs/:jobID/cancel", h.cancelSyncJob)
+	group.GET("/sync/schedules", h.listSyncSchedules)
+	group.POST("/sync/schedules/:id/run", h.runSyncSchedule)
 }
 
 func (h *Handler) listBackends(c *gin.Context) {
@@ -249,6 +251,24 @@ func (h *Handler) cancelSyncJob(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"job": job})
+}
+
+func (h *Handler) listSyncSchedules(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"schedules": h.service.ListSyncSchedules()})
+}
+
+func (h *Handler) runSyncSchedule(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid schedule id"})
+		return
+	}
+	schedule, err := h.service.TriggerSyncSchedule(id)
+	if err != nil {
+		writeStorageError(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"schedule": schedule})
 }
 
 func backendName(c *gin.Context) (string, bool) {
