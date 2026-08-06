@@ -86,7 +86,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Web 地址为 `http://localhost:8080`，BT 使用 `42069/tcp` 与 `42069/udp`。
+Web 地址为 `http://localhost:8080`，默认嵌入式引擎（`anacrolix`）使用 `42069/tcp` 与 `42069/udp`。
 
 容器通过 `DATA=/data` 设置数据根目录；配置与数据中的默认路径均为相对路径：
 
@@ -96,6 +96,12 @@ Web 地址为 `http://localhost:8080`，BT 使用 `42069/tcp` 与 `42069/udp`。
 | 数据根 `DATA` | `/data`（主机 `./data`） |
 | SQLite | `$DATA/db/home-gateway.db` |
 | 下载目录 | `$DATA/bt/downloads` |
+
+可选：使用 Compose profile `transmission` 启动 `transmission-daemon`，并在
+`config.yaml` 中设置 `bt.engine: transmission` 与
+`bt.transmission.url: http://transmission:9091/transmission/rpc`。此时请去掉
+`app` 服务上的 BT 端口映射，改由 `transmission` 服务发布 `BT_PORT`，且两边共用
+同一 `DATA` 卷，使引擎本地下载路径一致。
 
 查看日志和停止服务：
 
@@ -187,9 +193,11 @@ docker run --rm -it `
 默认读取 `/config/config.yaml`（见 `config.example.yaml`）：
 
 - `bt.*`：下载引擎参数（部分可在 Web 设置页写回）
+  - `bt.engine`：`anacrolix`（默认，进程内）或 `transmission`（RPC 连接 daemon）
+  - `bt.transmission.url` / `username` / `password`：仅 `engine=transmission` 时需要
   - `bt.storage_backend`：可选，默认存储后端名称；留空则使用本地文件系统
   - `bt.download_dir`：未选后端时为相对 `DATA` 的本地路径（默认 `bt/downloads`）；选中后端时为该后端上的相对目录
-  - `bt.block`：屏蔽规则（客户端、Peer ID、端口、IP/CIDR）；Peers 列表右键可追加，支持热加载
+  - `bt.block`：屏蔽规则（客户端、Peer ID、端口、IP/CIDR）；Peers 列表右键可追加，支持热加载；`transmission` 引擎下客户端/Peer ID/端口规则不会在握手层强制生效
   - `POST /api/bt/block`：追加一条屏蔽规则并写回 YAML
 - `storage.backends[]`：按**名称**定义 local / smb / s3；密钥用 `${ENV}`
 - `dns.cloudflare.token` / `zones`：Cloudflare 连接与托管域名列表
@@ -216,9 +224,14 @@ API Token 建议最小权限：
 
 ## BT 下载管理
 
-服务内嵌 `anacrolix/torrent`，支持磁力链接和 `.torrent` 文件、任务列表与实时
-进度、暂停/恢复、文件选择及优先级、删除任务以及可选删除下载数据。任务状态和
-文件选择保存在数据库中，服务重启后会自动恢复并续传。Web 管理接口均要求登录。
+默认使用进程内嵌的 `anacrolix/torrent`；也可通过 `bt.engine: transmission` 对接
+本机或 Compose 中的 `transmission-daemon`（RPC）。两种引擎均支持磁力链接和
+`.torrent` 文件、任务列表与实时进度、暂停/恢复、文件选择及优先级、删除任务以及
+可选删除下载数据。任务状态和文件选择保存在数据库中，服务重启后会自动恢复并续传。
+Web 管理接口均要求登录。
+
+无论引擎为何，SMB/S3 等远程存储仍走本地 staging → `SyncTask`；Transmission 只
+写入本地引擎目录。
 
 BT 任务状态、文件选择与同步进度保存在 SQLite；下载内容在磁盘上。添加任务时可
 选择配置中的存储后端名称；远程后端先写入本地 staging，再按 `complete` /

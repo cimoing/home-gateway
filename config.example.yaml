@@ -1,5 +1,13 @@
 bt:
   enabled: true
+  # Engine: anacrolix (embedded, default) or transmission (RPC to transmission-daemon).
+  # engine: anacrolix
+  # When engine=transmission, peer listen port and download root are applied via RPC.
+  # transmission:
+  #   url: http://127.0.0.1:9091/transmission/rpc
+  #   # Docker Compose profile: http://transmission:9091/transmission/rpc
+  #   username: ""
+  #   password: ${TRANSMISSION_RPC_PASSWORD}
   # Optional default storage backend name from storage.backends.
   # Empty = local filesystem at download_dir.
   # storage_backend: local
@@ -18,6 +26,8 @@ bt:
   # max concurrent uploads while syncing to remote storage
   sync_concurrency: 2
   # Peer blocklist (hot-reloadable via POST /api/system/reload-config)
+  # With engine=transmission, client/peer-id/port rules are not enforced by the daemon;
+  # IP/CIDR denial needs Transmission's own blocklist.
   block:
     clients: []
     # clients:

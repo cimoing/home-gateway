@@ -62,6 +62,7 @@ export interface BTBlockConfig {
 
 export interface BTSettings {
   enabled: boolean
+  engine?: string
   storageBackend?: string
   downloadDir?: string
   downloadRoot: string

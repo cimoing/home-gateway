@@ -15,12 +15,16 @@ import (
 )
 
 const (
-	DefaultPath            = "/config/config.yaml"
-	DefaultDownloadDir     = "bt/downloads"
-	DefaultStagingDir      = "bt/.staging"
-	DefaultListenPort      = 42069
-	DefaultSyncStrategy    = "complete"
-	DefaultSyncConcurrency = 2
+	DefaultPath             = "/config/config.yaml"
+	DefaultDownloadDir      = "bt/downloads"
+	DefaultStagingDir       = "bt/.staging"
+	DefaultListenPort       = 42069
+	DefaultSyncStrategy     = "complete"
+	DefaultSyncConcurrency  = 2
+	DefaultBTEngine         = "anacrolix"
+	BTEngineAnacrolix       = "anacrolix"
+	BTEngineTransmission    = "transmission"
+	DefaultTransmissionURL  = "http://127.0.0.1:9091/transmission/rpc"
 )
 
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
@@ -34,16 +38,18 @@ type Config struct {
 
 // BTConfig controls the embedded BitTorrent client.
 type BTConfig struct {
-	Enabled          bool          `yaml:"enabled" json:"enabled"`
-	StorageBackend   string        `yaml:"storage_backend" json:"storageBackend"`
-	DownloadDir      string        `yaml:"download_dir" json:"downloadDir"`
-	ListenPort       int           `yaml:"listen_port" json:"listenPort"`
-	DownloadLimitBps ByteRate      `yaml:"download_limit_bps" json:"downloadLimitBps"`
-	UploadLimitBps   ByteRate      `yaml:"upload_limit_bps" json:"uploadLimitBps"`
-	SeedRatioLimit   float64       `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
-	SyncStrategy     string        `yaml:"sync_strategy" json:"syncStrategy"`
-	SyncConcurrency  int           `yaml:"sync_concurrency" json:"syncConcurrency"`
-	Block            BTBlockConfig `yaml:"block" json:"block"`
+	Enabled          bool                `yaml:"enabled" json:"enabled"`
+	Engine           string              `yaml:"engine" json:"engine"`
+	Transmission     TransmissionConfig  `yaml:"transmission" json:"transmission"`
+	StorageBackend   string              `yaml:"storage_backend" json:"storageBackend"`
+	DownloadDir      string              `yaml:"download_dir" json:"downloadDir"`
+	ListenPort       int                 `yaml:"listen_port" json:"listenPort"`
+	DownloadLimitBps ByteRate            `yaml:"download_limit_bps" json:"downloadLimitBps"`
+	UploadLimitBps   ByteRate            `yaml:"upload_limit_bps" json:"uploadLimitBps"`
+	SeedRatioLimit   float64             `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
+	SyncStrategy     string              `yaml:"sync_strategy" json:"syncStrategy"`
+	SyncConcurrency  int                 `yaml:"sync_concurrency" json:"syncConcurrency"`
+	Block            BTBlockConfig       `yaml:"block" json:"block"`
 
 	// EngineDir is the local filesystem root used by the torrent engine.
 	// When StorageBackend is empty it equals the resolved DownloadDir; when the
@@ -51,6 +57,13 @@ type BTConfig struct {
 	EngineDir string `yaml:"-" json:"-"`
 	// StoragePrefix is DownloadDir cleaned as a path on the selected backend.
 	StoragePrefix string `yaml:"-" json:"-"`
+}
+
+// TransmissionConfig configures the optional transmission-daemon RPC backend.
+type TransmissionConfig struct {
+	URL      string `yaml:"url" json:"url"`
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password,omitempty"`
 }
 
 // BTBlockConfig lists peers to reject by client, peer ID, port, or IP/CIDR.
@@ -90,6 +103,8 @@ type CloudflareConfig struct {
 func Default() Config {
 	return Config{BT: BTConfig{
 		Enabled:         true,
+		Engine:          DefaultBTEngine,
+		Transmission:    TransmissionConfig{URL: DefaultTransmissionURL},
 		DownloadDir:     DefaultDownloadDir,
 		ListenPort:      DefaultListenPort,
 		SyncStrategy:    DefaultSyncStrategy,
@@ -164,6 +179,38 @@ func normalize(config Config, configPath string) (Config, error) {
 	}
 	if config.BT.ListenPort < 1 || config.BT.ListenPort > 65535 {
 		return Config{}, errors.New("bt.listen_port must be between 1 and 65535")
+	}
+	engine := strings.ToLower(strings.TrimSpace(config.BT.Engine))
+	if engine == "" {
+		engine = DefaultBTEngine
+	}
+	switch engine {
+	case BTEngineAnacrolix, BTEngineTransmission:
+		config.BT.Engine = engine
+	default:
+		return Config{}, errors.New("bt.engine must be anacrolix or transmission")
+	}
+	if strings.TrimSpace(config.BT.Transmission.URL) == "" {
+		config.BT.Transmission.URL = DefaultTransmissionURL
+	}
+	if expanded, err := ExpandEnv(config.BT.Transmission.URL); err != nil {
+		return Config{}, fmt.Errorf("bt.transmission.url: %w", err)
+	} else {
+		config.BT.Transmission.URL = expanded
+	}
+	if config.BT.Transmission.Username != "" {
+		if expanded, err := ExpandEnv(config.BT.Transmission.Username); err != nil {
+			return Config{}, fmt.Errorf("bt.transmission.username: %w", err)
+		} else {
+			config.BT.Transmission.Username = expanded
+		}
+	}
+	if config.BT.Transmission.Password != "" {
+		if expanded, err := ExpandEnv(config.BT.Transmission.Password); err != nil {
+			return Config{}, fmt.Errorf("bt.transmission.password: %w", err)
+		} else {
+			config.BT.Transmission.Password = expanded
+		}
 	}
 	if config.BT.DownloadLimitBps < 0 || config.BT.UploadLimitBps < 0 {
 		return Config{}, errors.New("bt rate limits must be zero or positive")

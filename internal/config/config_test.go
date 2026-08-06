@@ -47,9 +47,60 @@ func TestMissingOptionalConfigUsesDefaults(t *testing.T) {
 	if config.BT.ListenPort != DefaultListenPort {
 		t.Fatalf("unexpected listen port %d", config.BT.ListenPort)
 	}
+	if config.BT.Engine != DefaultBTEngine {
+		t.Fatalf("unexpected engine %q", config.BT.Engine)
+	}
+	if config.BT.Transmission.URL != DefaultTransmissionURL {
+		t.Fatalf("unexpected transmission url %q", config.BT.Transmission.URL)
+	}
 	wantDownload := filepath.Join(root, "bt", "downloads")
 	if config.BT.DownloadDir != wantDownload {
 		t.Fatalf("download dir %q, want %q", config.BT.DownloadDir, wantDownload)
+	}
+}
+
+func TestBTEngineTransmissionConfig(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DATA", root)
+	t.Setenv("TRANSMISSION_RPC_PASSWORD", "rpc-pass")
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+bt:
+  engine: transmission
+  transmission:
+    url: http://transmission:9091/transmission/rpc
+    username: tr
+    password: ${TRANSMISSION_RPC_PASSWORD}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Load(configPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.BT.Engine != BTEngineTransmission {
+		t.Fatalf("engine %q", config.BT.Engine)
+	}
+	if config.BT.Transmission.URL != "http://transmission:9091/transmission/rpc" {
+		t.Fatalf("url %q", config.BT.Transmission.URL)
+	}
+	if config.BT.Transmission.Username != "tr" || config.BT.Transmission.Password != "rpc-pass" {
+		t.Fatalf("auth %#v", config.BT.Transmission)
+	}
+}
+
+func TestBTEngineInvalidRejected(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DATA", root)
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+bt:
+  engine: libtorrent
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(configPath, true); err == nil {
+		t.Fatal("expected invalid engine to fail")
 	}
 }
 

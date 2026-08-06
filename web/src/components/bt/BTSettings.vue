@@ -50,7 +50,8 @@ function submit() {
       <p>下载目录与监听端口来自 YAML；速度限制、同步策略与并发可在此修改并写回配置。</p>
     </div>
     <dl v-if="settings" class="detail-grid">
-      <div><dt>引擎</dt><dd>{{ settings.running ? '运行中' : '未运行' }}</dd></div>
+      <div><dt>状态</dt><dd>{{ settings.running ? '运行中' : '未运行' }}</dd></div>
+      <div><dt>引擎</dt><dd>{{ settings.engine || 'anacrolix' }}</dd></div>
       <div><dt>启用</dt><dd>{{ settings.enabled ? '是' : '否' }}</dd></div>
       <div><dt>监听端口</dt><dd>{{ settings.listenPort }} / TCP + UDP</dd></div>
       <div>

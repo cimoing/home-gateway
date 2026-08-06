@@ -54,22 +54,43 @@ func runServer(cmd *cobra.Command) error {
 		if err := ensureWritableDirectory(config.BT.EngineDir); err != nil {
 			return err
 		}
-		anacrolix, err := bt.NewAnacrolixEngine(
-			config.BT.EngineDir,
-			config.BT.ListenPort,
-			config.BT.DownloadLimitBps.Int64(),
-			config.BT.UploadLimitBps.Int64(),
-			bt.BlockConfig{
-				Clients:  append([]string(nil), config.BT.Block.Clients...),
-				PeerIDs:  append([]string(nil), config.BT.Block.PeerIDs...),
-				Ports:    append([]int(nil), config.BT.Block.Ports...),
-				Networks: append([]string(nil), config.BT.Block.Networks...),
-			},
-		)
-		if err != nil {
-			return err
+		block := bt.BlockConfig{
+			Clients:  append([]string(nil), config.BT.Block.Clients...),
+			PeerIDs:  append([]string(nil), config.BT.Block.PeerIDs...),
+			Ports:    append([]int(nil), config.BT.Block.Ports...),
+			Networks: append([]string(nil), config.BT.Block.Networks...),
 		}
-		engine = anacrolix
+		switch config.BT.Engine {
+		case appconfig.BTEngineTransmission:
+			transmission, err := bt.NewTransmissionEngine(
+				config.BT.Transmission.URL,
+				config.BT.Transmission.Username,
+				config.BT.Transmission.Password,
+				config.BT.EngineDir,
+				config.BT.ListenPort,
+				config.BT.DownloadLimitBps.Int64(),
+				config.BT.UploadLimitBps.Int64(),
+				block,
+			)
+			if err != nil {
+				return err
+			}
+			engine = transmission
+			log.Printf("BT engine=transmission rpc=%s", config.BT.Transmission.URL)
+		default:
+			anacrolix, err := bt.NewAnacrolixEngine(
+				config.BT.EngineDir,
+				config.BT.ListenPort,
+				config.BT.DownloadLimitBps.Int64(),
+				config.BT.UploadLimitBps.Int64(),
+				block,
+			)
+			if err != nil {
+				return err
+			}
+			engine = anacrolix
+			log.Printf("BT engine=anacrolix listen_port=%d", config.BT.ListenPort)
+		}
 	}
 	storageService := storage.NewService(config.Storage.Backends)
 	dnsService := dns.NewService(config.DNS.Cloudflare)

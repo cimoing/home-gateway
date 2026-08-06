@@ -45,6 +45,7 @@ type AddOptions struct {
 // Settings is the runtime configuration exposed to the UI.
 type Settings struct {
 	Enabled          bool                    `json:"enabled"`
+	Engine           string                  `json:"engine"`
 	StorageBackend   string                  `json:"storageBackend"`
 	DownloadDir      string                  `json:"downloadDir"`
 	DownloadRoot     string                  `json:"downloadRoot"`
@@ -148,6 +149,7 @@ func (s *Service) Settings() Settings {
 	defer s.mu.Unlock()
 	return Settings{
 		Enabled:          s.config.Enabled,
+		Engine:           s.config.Engine,
 		StorageBackend:   s.config.StorageBackend,
 		DownloadDir:      s.config.DownloadDir,
 		DownloadRoot:     s.config.EngineDir,
@@ -382,6 +384,15 @@ func (s *Service) Restore(ctx context.Context) error {
 			runtime, err = s.engine.AddTorrent(task.Metainfo, task.SavePath)
 		default:
 			err = fmt.Errorf("unsupported source type %q", task.SourceType)
+		}
+		if errors.Is(err, ErrConflict) {
+			var ok bool
+			runtime, ok = s.engine.Task(task.InfoHash)
+			if !ok {
+				s.setTaskError(ctx, task.ID, fmt.Errorf("restore conflict for %s but runtime task missing", task.InfoHash))
+				continue
+			}
+			err = nil
 		}
 		if err != nil {
 			s.setTaskError(ctx, task.ID, err)
