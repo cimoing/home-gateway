@@ -2,36 +2,33 @@ package bt
 
 import (
 	"context"
-	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	appconfig "home-gateway/internal/config"
-	"home-gateway/internal/database"
 )
 
 type fakeEngine struct {
 	mu     sync.Mutex
+	nextID int64
 	tasks  map[string]*fakeEngineTask
 	closed bool
 }
 
 func newFakeEngine() *fakeEngine {
-	return &fakeEngine{tasks: make(map[string]*fakeEngineTask)}
+	return &fakeEngine{nextID: 1, tasks: make(map[string]*fakeEngineTask)}
 }
 
-func (e *fakeEngine) AddMagnet(_ string, _ string) (EngineTask, error) {
-	return e.add("hash-magnet")
+func (e *fakeEngine) AddMagnet(_ string, savePath string) (EngineTask, error) {
+	return e.add("hash-magnet", savePath)
 }
 
-func (e *fakeEngine) AddTorrent(_ []byte, _ string) (EngineTask, error) {
-	return e.add("hash-torrent")
+func (e *fakeEngine) AddTorrent(_ []byte, savePath string) (EngineTask, error) {
+	return e.add("hash-torrent", savePath)
 }
 
-func (e *fakeEngine) add(hash string) (EngineTask, error) {
+func (e *fakeEngine) add(hash, savePath string) (EngineTask, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, exists := e.tasks[hash]; exists {
@@ -39,9 +36,13 @@ func (e *fakeEngine) add(hash string) (EngineTask, error) {
 	}
 	ready := make(chan struct{})
 	close(ready)
+	id := e.nextID
+	e.nextID++
 	task := &fakeEngineTask{
-		hash:  hash,
-		ready: ready,
+		id:       id,
+		hash:     hash,
+		savePath: savePath,
+		ready:    ready,
 		metadata: TaskMetadata{
 			Name: "bundle", TotalBytes: 12,
 			Files: []TaskFile{
@@ -49,6 +50,7 @@ func (e *fakeEngine) add(hash string) (EngineTask, error) {
 				{Index: 1, Path: "bundle/b.txt", Length: 7},
 			},
 		},
+		stats: TaskStats{CompletedBytes: 0, FileCompleted: map[int]int64{}},
 	}
 	e.tasks[hash] = task
 	return task, nil
@@ -61,14 +63,82 @@ func (e *fakeEngine) Task(hash string) (EngineTask, bool) {
 	return task, ok
 }
 
-func (e *fakeEngine) Remove(hash string) error {
+func (e *fakeEngine) TaskByID(id int64) (EngineTask, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if _, ok := e.tasks[hash]; !ok {
-		return ErrNotFound
+	for _, task := range e.tasks {
+		if task.id == id {
+			return task, true
+		}
 	}
-	delete(e.tasks, hash)
-	return nil
+	return nil, false
+}
+
+func (e *fakeEngine) Remove(hash string) error {
+	return e.RemoveByID(e.tasks[hash].id, false)
+}
+
+func (e *fakeEngine) RemoveByID(id int64, _ bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for hash, task := range e.tasks {
+		if task.id == id {
+			delete(e.tasks, hash)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (e *fakeEngine) ListRemote() ([]RemoteTorrent, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]RemoteTorrent, 0, len(e.tasks))
+	for _, task := range e.tasks {
+		out = append(out, e.snapshotLocked(task))
+	}
+	return out, nil
+}
+
+func (e *fakeEngine) GetRemote(id int64) (RemoteTorrent, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, task := range e.tasks {
+		if task.id == id {
+			return e.snapshotLocked(task), nil
+		}
+	}
+	return RemoteTorrent{}, ErrNotFound
+}
+
+func (e *fakeEngine) snapshotLocked(task *fakeEngineTask) RemoteTorrent {
+	status := "downloading"
+	desired := "downloading"
+	if task.paused {
+		status = "paused"
+		desired = "paused"
+	}
+	files := make([]RemoteFile, 0, len(task.metadata.Files))
+	for _, file := range task.metadata.Files {
+		priority := 1
+		selected := true
+		for _, selection := range task.selections {
+			if selection.Index == file.Index {
+				priority = selection.Priority
+				selected = selection.Priority > 0
+			}
+		}
+		files = append(files, RemoteFile{
+			Index: file.Index, Path: file.Path, Length: file.Length,
+			Selected: selected, Priority: priority,
+		})
+	}
+	return RemoteTorrent{
+		ID: task.id, InfoHash: task.hash, Name: task.metadata.Name,
+		SavePath: task.savePath, Status: status, DesiredState: desired,
+		TotalBytes: task.metadata.TotalBytes, CompletedBytes: task.stats.CompletedBytes,
+		MetadataComplete: true, AddedAt: time.Now().UTC(), Files: files,
+	}
 }
 
 func (e *fakeEngine) Stats() EngineStats               { return EngineStats{} }
@@ -80,7 +150,9 @@ func (e *fakeEngine) Close() error {
 }
 
 type fakeEngineTask struct {
+	id           int64
 	hash         string
+	savePath     string
 	ready        chan struct{}
 	metadata     TaskMetadata
 	stats        TaskStats
@@ -89,6 +161,7 @@ type fakeEngineTask struct {
 	selections   []FileSelection
 }
 
+func (t *fakeEngineTask) ID() int64                      { return t.id }
 func (t *fakeEngineTask) InfoHash() string               { return t.hash }
 func (t *fakeEngineTask) MetadataReady() <-chan struct{} { return t.ready }
 func (t *fakeEngineTask) Metadata() TaskMetadata         { return t.metadata }
@@ -109,27 +182,11 @@ func (t *fakeEngineTask) SetFiles(files []FileSelection) error {
 	return nil
 }
 
-func TestServiceTaskLifecycleAndSafeDataDelete(t *testing.T) {
+func TestServiceRemoteTaskLifecycle(t *testing.T) {
 	ctx := context.Background()
-	db, err := database.Open(ctx, database.Config{
-		Driver: database.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "bt.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := database.Migrate(ctx, db, database.DriverSQLite); err != nil {
-		t.Fatal(err)
-	}
-
-	root := filepath.Join(t.TempDir(), "downloads")
-	if err := os.MkdirAll(root, 0o750); err != nil {
-		t.Fatal(err)
-	}
 	engine := newFakeEngine()
-	service := NewService(db, engine, appconfig.BTConfig{
-		Enable: true, DownloadDir: root, EngineDir: root, ListenPort: 51413,
+	service := NewService(engine, appconfig.BTConfig{
+		Enable: true, DownloadDir: "/downloads", EngineDir: "/downloads", ListenPort: 51413,
 	}, "")
 	defer service.Close()
 
@@ -140,12 +197,13 @@ func TestServiceTaskLifecycleAndSafeDataDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForFiles(t, service, task.ID)
-	task, err = service.GetTask(ctx, task.ID)
-	if err != nil || task.Name != "bundle" || task.Status != "downloading" {
-		t.Fatalf("unexpected task %+v: %v", task, err)
+	if task.ID == 0 || task.Name != "bundle" {
+		t.Fatalf("unexpected task %+v", task)
 	}
-
+	listed, err := service.ListTasks(ctx, "", "")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list %#v err=%v", listed, err)
+	}
 	if _, err := service.Pause(ctx, task.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -158,34 +216,10 @@ func TestServiceTaskLifecycleAndSafeDataDelete(t *testing.T) {
 	if err != nil || files[1].Selected {
 		t.Fatalf("unexpected file selection %+v: %v", files, err)
 	}
-
-	dataPath := filepath.Join(root, "linux", "bundle", "a.txt")
-	if err := os.MkdirAll(filepath.Dir(dataPath), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dataPath, []byte("hello"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	if err := service.Delete(ctx, task.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(dataPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected downloaded file to be deleted, got %v", err)
-	}
-	if _, err := service.GetTask(ctx, task.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := service.GetTask(ctx, task.ID); err != ErrNotFound {
 		t.Fatalf("expected deleted task to be absent, got %v", err)
 	}
-}
-
-func waitForFiles(t *testing.T, service *Service, taskID int64) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		files, err := service.Files(context.Background(), taskID)
-		if err == nil && len(files) == 2 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("timed out waiting for torrent metadata")
 }

@@ -76,15 +76,12 @@ func runServer(cmd *cobra.Command) error {
 		}
 		engine = transmission
 		log.Printf("BT enabled via transmission RPC url=%s", config.BT.Transmission.URL)
-		btService = bt.NewService(db, engine, config.BT, configPath)
+		btService = bt.NewService(engine, config.BT, configPath)
 		defer func() {
 			if err := btService.Close(); err != nil {
 				log.Printf("BitTorrent shutdown failed: %v", err)
 			}
 		}()
-		if err := btService.Restore(cmd.Context()); err != nil {
-			return fmt.Errorf("restore BitTorrent tasks: %w", err)
-		}
 	}
 
 	storageService := storage.NewService(config.Storage.Backends)

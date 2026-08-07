@@ -2,111 +2,63 @@ package bt
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"home-gateway/internal/model"
 )
 
-// Pause updates restart intent and pauses network data downloading.
-func (s *Service) Pause(ctx context.Context, id int64) (model.BTTask, error) {
-	task, err := s.GetTask(ctx, id)
+// Pause stops the remote torrent.
+func (s *Service) Pause(_ context.Context, id int64) (model.BTTask, error) {
+	runtime, err := s.runtimeByID(id)
 	if err != nil {
 		return model.BTTask{}, err
-	}
-	runtime, ok := s.runtimeTask(task.InfoHash)
-	if !ok {
-		return model.BTTask{}, ErrUnavailable
-	}
-	query := s.db.Rebind(`
-		UPDATE bt_tasks SET desired_state = ?, status = ?, updated_at = ? WHERE id = ?
-	`)
-	now := time.Now().UTC()
-	if _, err := s.db.ExecContext(
-		ctx, query, model.BTStatePaused, model.BTStatePaused, now, id,
-	); err != nil {
-		return model.BTTask{}, fmt.Errorf("persist paused BT state: %w", err)
 	}
 	runtime.Pause()
-	return s.GetTask(ctx, id)
+	return s.GetTask(context.Background(), id)
 }
 
-// Resume updates restart intent and allows selected files to download.
-func (s *Service) Resume(ctx context.Context, id int64) (model.BTTask, error) {
-	task, err := s.GetTask(ctx, id)
+// Resume starts the remote torrent.
+func (s *Service) Resume(_ context.Context, id int64) (model.BTTask, error) {
+	runtime, err := s.runtimeByID(id)
 	if err != nil {
 		return model.BTTask{}, err
 	}
-	runtime, ok := s.runtimeTask(task.InfoHash)
-	if !ok {
-		return model.BTTask{}, ErrUnavailable
-	}
-	status := model.BTStateMetadata
-	if metadataReady(runtime) {
-		status = model.BTStateDownloading
-	}
-	query := s.db.Rebind(`
-		UPDATE bt_tasks SET desired_state = ?, status = ?, error_message = '',
-		    updated_at = ? WHERE id = ?
-	`)
-	now := time.Now().UTC()
-	if _, err := s.db.ExecContext(
-		ctx, query, model.BTStateDownloading, status, now, id,
-	); err != nil {
-		return model.BTTask{}, fmt.Errorf("persist resumed BT state: %w", err)
-	}
 	s.mu.Lock()
-	delete(s.seedPaused, task.InfoHash)
+	delete(s.seedPaused, runtime.InfoHash())
 	limit := s.config.SeedRatioLimit
 	s.mu.Unlock()
 	runtime.Resume()
 	if limit > 0 {
 		stats := runtime.Stats()
-		if task.TotalBytes > 0 && stats.CompletedBytes >= task.TotalBytes {
-			ratio := shareRatio(stats.UploadedBytes, stats.DownloadedBytes, task.TotalBytes)
+		meta := runtime.Metadata()
+		if meta.TotalBytes > 0 && stats.CompletedBytes >= meta.TotalBytes {
+			ratio := shareRatio(stats.UploadedBytes, stats.DownloadedBytes, meta.TotalBytes)
 			if ratio >= limit {
 				runtime.PauseUpload()
 				s.mu.Lock()
-				s.seedPaused[task.InfoHash] = true
+				s.seedPaused[runtime.InfoHash()] = true
 				s.mu.Unlock()
 			}
 		}
 	}
-	return s.GetTask(ctx, id)
+	return s.GetTask(context.Background(), id)
 }
 
-func metadataReady(task EngineTask) bool {
-	select {
-	case <-task.MetadataReady():
-		return true
-	default:
-		return false
-	}
-}
-
-// UpdateFiles persists and applies all provided file selections.
+// UpdateFiles applies file selections on the remote torrent.
 func (s *Service) UpdateFiles(
-	ctx context.Context,
+	_ context.Context,
 	taskID int64,
 	updates []FileSelection,
 ) ([]model.BTTaskFile, error) {
-	task, err := s.GetTask(ctx, taskID)
+	runtime, err := s.runtimeByID(taskID)
 	if err != nil {
 		return nil, err
-	}
-	runtime, ok := s.runtimeTask(task.InfoHash)
-	if !ok {
-		return nil, ErrUnavailable
 	}
 	if len(updates) == 0 {
 		return nil, fmt.Errorf("%w: at least one file selection is required", ErrInvalidInput)
 	}
-
-	files, err := s.Files(ctx, taskID)
+	files, err := s.Files(context.Background(), taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -132,69 +84,28 @@ func (s *Service) UpdateFiles(
 			Index: file.FileIndex, Priority: priority,
 		})
 	}
-
-	tx, err := s.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin file selection transaction: %w", err)
-	}
-	defer tx.Rollback()
-	updateQuery := tx.Rebind(`
-		UPDATE bt_task_files
-		SET selected = ?, priority = ?,
-		    sync_status = 'none',
-		    sync_error = CASE WHEN ? = 0 THEN '' ELSE sync_error END
-		WHERE task_id = ? AND file_index = ?
-	`)
-	for _, file := range files {
-		selected := 0
-		if file.Selected {
-			selected = 1
-		}
-		if _, err := tx.ExecContext(
-			ctx, updateQuery,
-			file.Selected, file.Priority, selected, taskID, file.FileIndex,
-		); err != nil {
-			return nil, fmt.Errorf("persist BT file selection: %w", err)
-		}
-	}
 	if err := runtime.SetFiles(allSelections); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit BT file selection: %w", err)
-	}
-	return s.Files(ctx, taskID)
+	return s.Files(context.Background(), taskID)
 }
 
-// Delete removes a task and optionally its selected torrent files.
-func (s *Service) Delete(ctx context.Context, id int64, deleteData bool) error {
-	task, err := s.GetTask(ctx, id)
+// Delete removes a torrent from the remote engine.
+func (s *Service) Delete(_ context.Context, id int64, deleteData bool) error {
+	if s.engine == nil {
+		return ErrUnavailable
+	}
+	remote, err := s.engine.GetRemote(id)
 	if err != nil {
+		return mapTaskNotFound(err)
+	}
+	if err := s.engine.RemoveByID(id, deleteData); err != nil {
 		return err
-	}
-	files, err := s.Files(ctx, id)
-	if err != nil {
-		return err
-	}
-	if _, ok := s.runtimeTask(task.InfoHash); ok {
-		if err := s.engine.Remove(task.InfoHash); err != nil {
-			return err
-		}
-	}
-	if deleteData {
-		if err := s.deleteTaskFiles(task, files); err != nil {
-			s.setTaskError(ctx, id, err)
-			return err
-		}
-	}
-	query := s.db.Rebind(`DELETE FROM bt_tasks WHERE id = ?`)
-	if _, err := s.db.ExecContext(ctx, query, id); err != nil {
-		return fmt.Errorf("delete BT task: %w", err)
 	}
 	s.mu.Lock()
-	delete(s.samples, task.InfoHash)
-	delete(s.seedPaused, task.InfoHash)
-	prefix := task.InfoHash + "\x00"
+	delete(s.samples, remote.InfoHash)
+	delete(s.seedPaused, remote.InfoHash)
+	prefix := remote.InfoHash + "\x00"
 	for key := range s.peerSamples {
 		if strings.HasPrefix(key, prefix) {
 			delete(s.peerSamples, key)
@@ -204,39 +115,19 @@ func (s *Service) Delete(ctx context.Context, id int64, deleteData bool) error {
 	return nil
 }
 
-func (s *Service) deleteTaskFiles(task model.BTTask, files []model.BTTaskFile) error {
-	root, err := filepath.EvalSymlinks(s.config.DownloadDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// Remote Transmission hosts may use a path that is not local to this process.
-			return nil
-		}
-		return fmt.Errorf("resolve download root: %w", err)
+func (s *Service) runtimeByID(id int64) (EngineTask, error) {
+	if s.engine == nil {
+		return nil, ErrUnavailable
 	}
-	for _, file := range files {
-		target := filepath.Clean(filepath.Join(task.SavePath, filepath.FromSlash(file.Path)))
-		if !isWithin(root, target) {
-			return errors.New("refusing to delete data outside configured download root")
-		}
-		parent, err := filepath.EvalSymlinks(filepath.Dir(target))
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return fmt.Errorf("resolve torrent file directory: %w", err)
-		}
-		if !isWithin(root, parent) {
-			return errors.New("refusing to follow torrent path outside download root")
-		}
-		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("delete torrent file: %w", err)
-		}
+	if runtime, ok := s.engine.TaskByID(id); ok {
+		return runtime, nil
 	}
-	return nil
-}
-
-func isWithin(root string, path string) bool {
-	relative, err := filepath.Rel(root, path)
-	return err == nil && relative != ".." &&
-		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	if _, err := s.engine.GetRemote(id); err != nil {
+		return nil, mapTaskNotFound(err)
+	}
+	runtime, ok := s.engine.TaskByID(id)
+	if !ok {
+		return nil, ErrUnavailable
+	}
+	return runtime, nil
 }

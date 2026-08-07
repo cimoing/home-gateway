@@ -8,7 +8,7 @@ bt:
   # upload_limit_bps: 1M
   # seed_ratio_limit: 2
   transmission:
-    url: http://127.0.0.1:9091/transmission/rpc
+    url: https://bt.imoing.com/transmission/rpc
     # username: tr
     # password: ${TRANSMISSION_RPC_PASSWORD}
   # block:

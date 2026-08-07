@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -19,7 +20,7 @@ const (
 	DefaultPath            = "/config/config.yaml"
 	DefaultDownloadDir     = "/downloads"
 	DefaultPeerPort        = 51413
-	DefaultTransmissionURL = "http://127.0.0.1:9091/transmission/rpc"
+	DefaultTransmissionURL = "https://bt.imoing.com/transmission/rpc"
 )
 
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
@@ -314,10 +315,31 @@ func (c BTConfig) engineRoot() string {
 	return c.DownloadDir
 }
 
+func usesRemotePOSIXRoot(root string) bool {
+	normalized := strings.ReplaceAll(strings.TrimSpace(root), "\\", "/")
+	return strings.HasPrefix(normalized, "/")
+}
+
 // ResolveTaskDir safely resolves a task subdirectory beneath the engine root.
+// Roots that start with "/" are treated as transmission-daemon POSIX paths.
 func (c BTConfig) ResolveTaskDir(subdirectory string) (string, error) {
-	root := c.engineRoot()
+	root := strings.TrimSpace(c.engineRoot())
 	subdirectory = strings.TrimSpace(subdirectory)
+	if usesRemotePOSIXRoot(root) {
+		root = path.Clean(strings.ReplaceAll(root, "\\", "/"))
+		if subdirectory == "" || subdirectory == "." {
+			return root, nil
+		}
+		subdirectory = strings.ReplaceAll(subdirectory, "\\", "/")
+		if path.IsAbs(subdirectory) {
+			return "", errors.New("download subdirectory must be relative")
+		}
+		resolved := path.Clean(path.Join(root, subdirectory))
+		if resolved != root && !strings.HasPrefix(resolved, root+"/") {
+			return "", errors.New("download subdirectory escapes configured root")
+		}
+		return resolved, nil
+	}
 	if subdirectory == "" || subdirectory == "." {
 		return root, nil
 	}
@@ -333,8 +355,21 @@ func (c BTConfig) ResolveTaskDir(subdirectory string) (string, error) {
 }
 
 // RelativeTaskDir returns a safe path suitable for API responses.
-func (c BTConfig) RelativeTaskDir(path string) (string, error) {
-	relative, err := filepath.Rel(c.engineRoot(), filepath.Clean(path))
+func (c BTConfig) RelativeTaskDir(value string) (string, error) {
+	root := strings.TrimSpace(c.engineRoot())
+	if usesRemotePOSIXRoot(root) {
+		root = path.Clean(strings.ReplaceAll(root, "\\", "/"))
+		cleaned := path.Clean(strings.ReplaceAll(value, "\\", "/"))
+		if cleaned == root {
+			return "", nil
+		}
+		prefix := root + "/"
+		if !strings.HasPrefix(cleaned, prefix) {
+			return "", errors.New("task path is outside configured root")
+		}
+		return strings.TrimPrefix(cleaned, prefix), nil
+	}
+	relative, err := filepath.Rel(root, filepath.Clean(value))
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", errors.New("task path is outside configured root")
 	}

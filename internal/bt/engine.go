@@ -2,6 +2,7 @@ package bt
 
 import (
 	"errors"
+	"time"
 )
 
 var (
@@ -11,20 +12,54 @@ var (
 	ErrUnavailable  = errors.New("BT engine unavailable")
 )
 
-// Engine owns the process-wide BitTorrent client.
+// Engine owns the BitTorrent client (Transmission RPC).
 type Engine interface {
 	AddMagnet(uri string, savePath string) (EngineTask, error)
 	AddTorrent(metainfo []byte, savePath string) (EngineTask, error)
 	Task(infoHash string) (EngineTask, bool)
+	TaskByID(id int64) (EngineTask, bool)
 	Remove(infoHash string) error
+	RemoveByID(id int64, deleteData bool) error
+	ListRemote() ([]RemoteTorrent, error)
+	GetRemote(id int64) (RemoteTorrent, error)
 	Stats() EngineStats
 	SetRateLimits(downloadBps, uploadBps int64)
 	SetBlockConfig(config BlockConfig) error
 	Close() error
 }
 
+// RemoteTorrent is a torrent snapshot from the remote engine.
+type RemoteTorrent struct {
+	ID               int64
+	InfoHash         string
+	Name             string
+	SavePath         string
+	Status           string
+	DesiredState     string
+	Error            string
+	TotalBytes       int64
+	CompletedBytes   int64
+	DownloadedBytes  int64
+	UploadedBytes    int64
+	Peers            int
+	MetadataComplete bool
+	AddedAt          time.Time
+	Files            []RemoteFile
+}
+
+// RemoteFile is one file entry from the remote engine.
+type RemoteFile struct {
+	Index          int
+	Path           string
+	Length         int64
+	Selected       bool
+	Priority       int
+	CompletedBytes int64
+}
+
 // EngineTask is the runtime control surface used by Service.
 type EngineTask interface {
+	ID() int64
 	InfoHash() string
 	MetadataReady() <-chan struct{}
 	Metadata() TaskMetadata
@@ -58,8 +93,6 @@ type FileSelection struct {
 }
 
 // TaskStats contains cumulative counters and live gauges.
-// DownloadedBytes/UploadedBytes are torrent file payload only (piece data),
-// never wire/protocol chatter such as handshake, bitfield, have, or keepalive.
 type TaskStats struct {
 	CompletedBytes  int64
 	DownloadedBytes int64
@@ -69,7 +102,6 @@ type TaskStats struct {
 }
 
 // PeerInfo describes one connected peer for a task.
-// Downloaded/Uploaded and rates are file payload only.
 type PeerInfo struct {
 	Address       string `json:"address"`
 	PeerID        string `json:"peerId"`
@@ -84,7 +116,6 @@ type PeerInfo struct {
 }
 
 // EngineStats contains process-wide BitTorrent gauges.
-// DownloadedBytes/UploadedBytes are file payload only across all torrents.
 type EngineStats struct {
 	DHTNodes        int
 	DHTGoodNodes    int

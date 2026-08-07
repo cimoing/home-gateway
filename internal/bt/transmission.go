@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"path/filepath"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -47,7 +47,7 @@ func NewTransmissionEngine(
 	}
 	engine := &TransmissionEngine{
 		rpc:        newTransmissionRPC(rpcURL, username, password),
-		rootPath:   filepath.Clean(downloadDir),
+		rootPath:   cleanRemotePath(downloadDir),
 		listenPort: listenPort,
 		blocker:    blocker,
 		tasks:      make(map[string]*transmissionTask),
@@ -133,7 +133,7 @@ func (e *TransmissionEngine) reloadTasks() error {
 func (e *TransmissionEngine) AddMagnet(uri string, savePath string) (EngineTask, error) {
 	return e.add(map[string]any{
 		"filename":     uri,
-		"download-dir": filepath.Clean(savePath),
+		"download-dir": cleanRemotePath(savePath),
 		"paused":       true,
 	})
 }
@@ -141,9 +141,23 @@ func (e *TransmissionEngine) AddMagnet(uri string, savePath string) (EngineTask,
 func (e *TransmissionEngine) AddTorrent(data []byte, savePath string) (EngineTask, error) {
 	return e.add(map[string]any{
 		"metainfo":     base64.StdEncoding.EncodeToString(data),
-		"download-dir": filepath.Clean(savePath),
+		"download-dir": cleanRemotePath(savePath),
 		"paused":       true,
 	})
+}
+
+// cleanRemotePath normalizes a path as seen by transmission-daemon (POSIX),
+// independent of the OS running home-gateway.
+func cleanRemotePath(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if value == "" {
+		return ""
+	}
+	cleaned := path.Clean(value)
+	if strings.HasPrefix(value, "/") && cleaned != "/" && !strings.HasPrefix(cleaned, "/") {
+		cleaned = "/" + cleaned
+	}
+	return cleaned
 }
 
 func (e *TransmissionEngine) add(args map[string]any) (EngineTask, error) {
@@ -224,6 +238,17 @@ func (e *TransmissionEngine) Task(infoHash string) (EngineTask, bool) {
 	return task, ok
 }
 
+func (e *TransmissionEngine) TaskByID(id int64) (EngineTask, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, task := range e.tasks {
+		if task.id == id {
+			return task, true
+		}
+	}
+	return nil, false
+}
+
 func (e *TransmissionEngine) Remove(infoHash string) error {
 	hash := strings.ToLower(infoHash)
 	e.mu.Lock()
@@ -235,11 +260,151 @@ func (e *TransmissionEngine) Remove(infoHash string) error {
 	if !ok {
 		return ErrNotFound
 	}
+	return e.RemoveByID(task.id, false)
+}
+
+func (e *TransmissionEngine) RemoveByID(id int64, deleteData bool) error {
+	e.mu.Lock()
+	for hash, task := range e.tasks {
+		if task.id == id {
+			delete(e.tasks, hash)
+			break
+		}
+	}
+	e.mu.Unlock()
 	_, _, err := e.rpc.callResult("torrent-remove", map[string]any{
-		"ids":               []int64{task.id},
-		"delete-local-data": false,
+		"ids":               []int64{id},
+		"delete-local-data": deleteData,
 	})
 	return err
+}
+
+var remoteTorrentFields = []string{
+	"id", "hashString", "name", "downloadDir", "status", "errorString",
+	"totalSize", "haveValid", "downloadedEver", "uploadedEver", "peersConnected",
+	"metadataPercentComplete", "addedDate", "files", "fileStats",
+}
+
+// ListRemote returns all torrents from transmission-daemon.
+func (e *TransmissionEngine) ListRemote() ([]RemoteTorrent, error) {
+	var result struct {
+		Torrents []transmissionTorrent `json:"torrents"`
+	}
+	if err := e.rpc.call("torrent-get", map[string]any{"fields": remoteTorrentFields}, &result); err != nil {
+		return nil, err
+	}
+	out := make([]RemoteTorrent, 0, len(result.Torrents))
+	for index := range result.Torrents {
+		torrent := &result.Torrents[index]
+		_ = e.ensureTask(torrent)
+		out = append(out, mapRemoteTorrent(torrent, e.rootPath))
+	}
+	return out, nil
+}
+
+// GetRemote returns one torrent by Transmission id.
+func (e *TransmissionEngine) GetRemote(id int64) (RemoteTorrent, error) {
+	var result struct {
+		Torrents []transmissionTorrent `json:"torrents"`
+	}
+	if err := e.rpc.call("torrent-get", map[string]any{
+		"ids":    []int64{id},
+		"fields": remoteTorrentFields,
+	}, &result); err != nil {
+		return RemoteTorrent{}, err
+	}
+	if len(result.Torrents) == 0 {
+		return RemoteTorrent{}, ErrNotFound
+	}
+	torrent := &result.Torrents[0]
+	_ = e.ensureTask(torrent)
+	return mapRemoteTorrent(torrent, e.rootPath), nil
+}
+
+func mapRemoteTorrent(torrent *transmissionTorrent, root string) RemoteTorrent {
+	savePath := cleanRemotePath(torrent.DownloadDir)
+	if savePath == "" {
+		savePath = root
+	}
+	status, desired := mapTransmissionStatus(torrent)
+	files := make([]RemoteFile, 0, len(torrent.Files))
+	for index, file := range torrent.Files {
+		wanted := true
+		priority := 1
+		completed := file.BytesCompleted
+		if index < len(torrent.FileStats) {
+			wanted = torrent.FileStats[index].Wanted
+			priority = mapTransmissionFilePriority(wanted, torrent.FileStats[index].Priority)
+			completed = torrent.FileStats[index].BytesCompleted
+		} else if !wanted {
+			priority = 0
+		}
+		files = append(files, RemoteFile{
+			Index:          index,
+			Path:           strings.ReplaceAll(file.Name, "\\", "/"),
+			Length:         file.Length,
+			Selected:       wanted,
+			Priority:       priority,
+			CompletedBytes: completed,
+		})
+	}
+	addedAt := time.Time{}
+	if torrent.AddedDate > 0 {
+		addedAt = time.Unix(int64(torrent.AddedDate), 0).UTC()
+	}
+	return RemoteTorrent{
+		ID:               torrent.ID,
+		InfoHash:         strings.ToLower(strings.TrimSpace(torrent.HashString)),
+		Name:             torrent.Name,
+		SavePath:         savePath,
+		Status:           status,
+		DesiredState:     desired,
+		Error:            torrent.ErrorString,
+		TotalBytes:       torrent.TotalSize,
+		CompletedBytes:   torrent.HaveValid,
+		DownloadedBytes:  torrent.DownloadedEver,
+		UploadedBytes:    torrent.UploadedEver,
+		Peers:            torrent.PeersConnected,
+		MetadataComplete: torrent.MetadataPercentComplete >= 1 || len(torrent.Files) > 0,
+		AddedAt:          addedAt,
+		Files:            files,
+	}
+}
+
+func mapTransmissionStatus(torrent *transmissionTorrent) (status, desired string) {
+	metaReady := torrent.MetadataPercentComplete >= 1 || len(torrent.Files) > 0
+	completed := torrent.TotalSize > 0 && torrent.HaveValid >= torrent.TotalSize
+	if torrent.Status == 0 {
+		desired = "paused"
+	} else {
+		desired = "downloading"
+	}
+	if !metaReady {
+		return "metadata", desired
+	}
+	if torrent.Status == 0 {
+		if completed {
+			return "completed", desired
+		}
+		return "paused", desired
+	}
+	if completed {
+		return "completed", desired
+	}
+	if torrent.ErrorString != "" {
+		return "error", desired
+	}
+	return "downloading", desired
+}
+
+func mapTransmissionFilePriority(wanted bool, priority int) int {
+	if !wanted {
+		return 0
+	}
+	if priority >= 1 {
+		return 2
+	}
+	return 1
 }
 
 func (e *TransmissionEngine) Stats() EngineStats {
@@ -287,6 +452,7 @@ func (e *TransmissionEngine) Close() error {
 	return nil
 }
 
+func (t *transmissionTask) ID() int64       { return t.id }
 func (t *transmissionTask) InfoHash() string { return t.hash }
 
 func (t *transmissionTask) MetadataReady() <-chan struct{} { return t.ready }

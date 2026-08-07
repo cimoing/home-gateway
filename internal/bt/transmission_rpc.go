@@ -117,21 +117,22 @@ func (c *transmissionRPC) callInto(method string, args map[string]any, out any) 
 }
 
 type transmissionTorrent struct {
-	ID                      int64              `json:"id"`
-	HashString              string             `json:"hashString"`
-	Name                    string             `json:"name"`
-	DownloadDir             string             `json:"downloadDir"`
-	TotalSize               int64              `json:"totalSize"`
-	HaveValid               int64              `json:"haveValid"`
-	DownloadedEver          int64              `json:"downloadedEver"`
-	UploadedEver            int64              `json:"uploadedEver"`
-	PeersConnected          int                `json:"peersConnected"`
-	Status                  int                `json:"status"`
-	MetadataPercentComplete float64            `json:"metadataPercentComplete"`
-	Files                   []transmissionFile `json:"files"`
+	ID                      int64                  `json:"id"`
+	HashString              string                 `json:"hashString"`
+	Name                    string                 `json:"name"`
+	DownloadDir             string                 `json:"downloadDir"`
+	TotalSize               int64                  `json:"totalSize"`
+	HaveValid               int64                  `json:"haveValid"`
+	DownloadedEver          int64                  `json:"downloadedEver"`
+	UploadedEver            int64                  `json:"uploadedEver"`
+	PeersConnected          int                    `json:"peersConnected"`
+	Status                  int                    `json:"status"`
+	AddedDate               float64                `json:"addedDate"`
+	MetadataPercentComplete float64                `json:"metadataPercentComplete"`
+	Files                   []transmissionFile     `json:"files"`
 	FileStats               []transmissionFileStat `json:"fileStats"`
-	Peers                   []transmissionPeer `json:"peers"`
-	ErrorString             string             `json:"errorString"`
+	Peers                   []transmissionPeer     `json:"peers"`
+	ErrorString             string                 `json:"errorString"`
 }
 
 type transmissionFile struct {
