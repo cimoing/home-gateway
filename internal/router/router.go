@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"home-gateway/internal/auth"
+	"home-gateway/internal/bt"
 	"home-gateway/internal/dns"
 	"home-gateway/internal/storage"
 	"home-gateway/internal/webui"
@@ -15,11 +16,18 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+// Features lists optional modules available to the signed-in UI.
+type Features struct {
+	BT bool `json:"bt"`
+}
+
 // Services bundles runtime dependencies for the HTTP router.
 type Services struct {
 	Database *sqlx.DB
+	BT       *bt.Service
 	Storage  *storage.Service
 	DNS      *dns.Service
+	Features func() Features
 	Reload   func() error
 }
 
@@ -61,11 +69,23 @@ func newRouter(webFS http.FileSystem, services Services) *gin.Engine {
 		authHandler.Register(api)
 		protected := api.Group("")
 		protected.Use(authHandler.RequireSession())
+		protected.GET("/system/features", func(c *gin.Context) {
+			features := Features{}
+			if services.Features != nil {
+				features = services.Features()
+			} else if services.BT != nil {
+				features.BT = true
+			}
+			c.JSON(http.StatusOK, gin.H{"features": features})
+		})
 		if services.DNS != nil {
 			dns.NewHandler(services.DNS).Register(protected)
 		}
 		if services.Storage != nil {
 			storage.NewHandler(services.Storage).Register(protected)
+		}
+		if services.BT != nil {
+			bt.NewHandler(services.BT).Register(protected)
 		}
 		if services.Reload != nil {
 			protected.POST("/system/reload-config", func(c *gin.Context) {

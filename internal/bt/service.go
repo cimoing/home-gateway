@@ -120,8 +120,8 @@ func (s *Service) Settings() Settings {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Settings{
-		Enabled:          s.config.Enabled,
-		Engine:           s.config.Engine,
+		Enabled:          s.config.Enable,
+		Engine:           "transmission",
 		DownloadDir:      s.config.DownloadDir,
 		DownloadRoot:     s.config.EngineDir,
 		ListenPort:       s.config.ListenPort,
@@ -141,12 +141,15 @@ func (s *Service) Settings() Settings {
 // ApplyConfig updates mutable BT settings from a reloaded YAML file without restarting the engine.
 func (s *Service) ApplyConfig(config appconfig.BTConfig) {
 	s.mu.Lock()
+	s.config.Enable = config.Enable
 	s.config.DownloadDir = config.DownloadDir
 	s.config.EngineDir = config.EngineDir
 	s.config.DownloadLimitBps = config.DownloadLimitBps
 	s.config.UploadLimitBps = config.UploadLimitBps
 	s.config.SeedRatioLimit = config.SeedRatioLimit
 	s.config.Block = config.Block
+	s.config.Transmission = config.Transmission
+	s.config.ListenPort = config.ListenPort
 	downloadLimit := s.config.DownloadLimitBps.Int64()
 	uploadLimit := s.config.UploadLimitBps.Int64()
 	block := blockConfigFromApp(s.config.Block)

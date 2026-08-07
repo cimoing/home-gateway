@@ -39,15 +39,15 @@ function submit() {
   <section class="panel settings-panel">
     <div class="panel-heading">
       <h2>BT 引擎设置</h2>
-      <p>下载目录与监听端口来自 YAML；速度限制与做种分享率可在此修改并写回配置。</p>
+      <p>通过后端转发 Transmission RPC；下载目录与 peer 端口来自 YAML，速度限制可写回配置。</p>
     </div>
     <dl v-if="settings" class="detail-grid">
       <div><dt>状态</dt><dd>{{ settings.running ? '运行中' : '未运行' }}</dd></div>
-      <div><dt>引擎</dt><dd>{{ settings.engine || 'anacrolix' }}</dd></div>
+      <div><dt>引擎</dt><dd>{{ settings.engine || 'transmission' }}</dd></div>
       <div><dt>启用</dt><dd>{{ settings.enabled ? '是' : '否' }}</dd></div>
-      <div><dt>监听端口</dt><dd>{{ settings.listenPort }} / TCP + UDP</dd></div>
-      <div><dt>配置下载目录</dt><dd>{{ settings.downloadDir || '—' }}</dd></div>
-      <div><dt>引擎本地目录</dt><dd>{{ settings.downloadRoot }}</dd></div>
+      <div><dt>Peer 端口</dt><dd>{{ settings.listenPort }}（远程 daemon）</dd></div>
+      <div><dt>下载目录</dt><dd>{{ settings.downloadDir || '—' }}</dd></div>
+      <div><dt>引擎根目录</dt><dd>{{ settings.downloadRoot }}</dd></div>
     </dl>
     <form v-if="settings" class="settings-form" @submit.prevent="submit">
       <label>

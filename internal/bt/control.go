@@ -207,6 +207,10 @@ func (s *Service) Delete(ctx context.Context, id int64, deleteData bool) error {
 func (s *Service) deleteTaskFiles(task model.BTTask, files []model.BTTaskFile) error {
 	root, err := filepath.EvalSymlinks(s.config.DownloadDir)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Remote Transmission hosts may use a path that is not local to this process.
+			return nil
+		}
 		return fmt.Errorf("resolve download root: %w", err)
 	}
 	for _, file := range files {

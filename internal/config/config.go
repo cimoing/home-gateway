@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,14 +15,51 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-const DefaultPath = "/config/config.yaml"
+const (
+	DefaultPath            = "/config/config.yaml"
+	DefaultDownloadDir     = "/downloads"
+	DefaultPeerPort        = 51413
+	DefaultTransmissionURL = "http://127.0.0.1:9091/transmission/rpc"
+)
 
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 
 // Config contains file-backed application settings.
 type Config struct {
+	BT      BTConfig      `yaml:"bt" json:"bt"`
 	Storage StorageConfig `yaml:"storage" json:"storage"`
 	DNS     DNSConfig     `yaml:"dns" json:"dns"`
+}
+
+// BTConfig controls the remote Transmission RPC download integration.
+type BTConfig struct {
+	// Enable shows the BT module and proxies task operations via Transmission RPC.
+	Enable           bool               `yaml:"enable" json:"enable"`
+	Transmission     TransmissionConfig `yaml:"transmission" json:"transmission"`
+	DownloadDir      string             `yaml:"download_dir" json:"downloadDir"`
+	ListenPort       int                `yaml:"listen_port" json:"listenPort"`
+	DownloadLimitBps ByteRate           `yaml:"download_limit_bps" json:"downloadLimitBps"`
+	UploadLimitBps   ByteRate           `yaml:"upload_limit_bps" json:"uploadLimitBps"`
+	SeedRatioLimit   float64            `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
+	Block            BTBlockConfig      `yaml:"block" json:"block"`
+
+	// EngineDir is the download root path known to transmission-daemon.
+	EngineDir string `yaml:"-" json:"-"`
+}
+
+// TransmissionConfig configures the remote transmission-daemon RPC backend.
+type TransmissionConfig struct {
+	URL      string `yaml:"url" json:"url"`
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password,omitempty"`
+}
+
+// BTBlockConfig lists peers to reject by client, peer ID, port, or IP/CIDR.
+type BTBlockConfig struct {
+	Clients  []string `yaml:"clients" json:"clients"`
+	PeerIDs  []string `yaml:"peer_ids" json:"peerIds"`
+	Ports    []int    `yaml:"ports" json:"ports"`
+	Networks []string `yaml:"networks" json:"networks"`
 }
 
 // StorageConfig holds named storage backends from YAML.
@@ -67,7 +105,12 @@ type CloudflareConfig struct {
 
 // Default returns safe settings when the default config file is absent.
 func Default() Config {
-	return Config{}
+	return Config{BT: BTConfig{
+		Enable:       false,
+		Transmission: TransmissionConfig{URL: DefaultTransmissionURL},
+		DownloadDir:  DefaultDownloadDir,
+		ListenPort:   DefaultPeerPort,
+	}}
 }
 
 // Load parses a YAML file. A missing non-required file uses defaults.
@@ -129,6 +172,12 @@ func ExpandEnv(value string) (string, error) {
 }
 
 func normalize(config Config) (Config, error) {
+	bt, err := expandBT(config.BT)
+	if err != nil {
+		return Config{}, err
+	}
+	config.BT = bt
+
 	expanded, err := expandStorage(config.Storage)
 	if err != nil {
 		return Config{}, err
@@ -141,6 +190,158 @@ func normalize(config Config) (Config, error) {
 	}
 	config.DNS = dnsExpanded
 	return config, nil
+}
+
+func expandBT(bt BTConfig) (BTConfig, error) {
+	if strings.TrimSpace(bt.DownloadDir) == "" {
+		bt.DownloadDir = DefaultDownloadDir
+	}
+	if bt.ListenPort == 0 {
+		bt.ListenPort = DefaultPeerPort
+	}
+	if bt.ListenPort < 1 || bt.ListenPort > 65535 {
+		return BTConfig{}, errors.New("bt.listen_port must be between 1 and 65535")
+	}
+	if strings.TrimSpace(bt.Transmission.URL) == "" {
+		bt.Transmission.URL = DefaultTransmissionURL
+	}
+	if expanded, err := ExpandEnv(bt.Transmission.URL); err != nil {
+		return BTConfig{}, fmt.Errorf("bt.transmission.url: %w", err)
+	} else {
+		bt.Transmission.URL = expanded
+	}
+	if bt.Transmission.Username != "" {
+		if expanded, err := ExpandEnv(bt.Transmission.Username); err != nil {
+			return BTConfig{}, fmt.Errorf("bt.transmission.username: %w", err)
+		} else {
+			bt.Transmission.Username = expanded
+		}
+	}
+	if bt.Transmission.Password != "" {
+		if expanded, err := ExpandEnv(bt.Transmission.Password); err != nil {
+			return BTConfig{}, fmt.Errorf("bt.transmission.password: %w", err)
+		} else {
+			bt.Transmission.Password = expanded
+		}
+	}
+	if bt.DownloadLimitBps < 0 || bt.UploadLimitBps < 0 {
+		return BTConfig{}, errors.New("bt rate limits must be zero or positive")
+	}
+	if bt.SeedRatioLimit < 0 {
+		return BTConfig{}, errors.New("bt.seed_ratio_limit must be zero or positive")
+	}
+	if err := normalizeBTBlock(&bt.Block); err != nil {
+		return BTConfig{}, err
+	}
+	if bt.Enable {
+		if strings.TrimSpace(bt.Transmission.URL) == "" {
+			return BTConfig{}, errors.New("bt.transmission.url is required when bt.enable is true")
+		}
+	}
+	// download_dir is the path as known by transmission-daemon (often absolute on that host).
+	bt.EngineDir = strings.TrimSpace(bt.DownloadDir)
+	return bt, nil
+}
+
+func normalizeBTBlock(block *BTBlockConfig) error {
+	clients := make([]string, 0, len(block.Clients))
+	for _, client := range block.Clients {
+		client = strings.TrimSpace(client)
+		if client == "" {
+			continue
+		}
+		clients = append(clients, client)
+	}
+	block.Clients = clients
+
+	peerIDs := make([]string, 0, len(block.PeerIDs))
+	seenPeerIDs := make(map[string]struct{}, len(block.PeerIDs))
+	for _, peerID := range block.PeerIDs {
+		peerID = strings.TrimSpace(peerID)
+		if peerID == "" {
+			continue
+		}
+		if _, exists := seenPeerIDs[peerID]; exists {
+			continue
+		}
+		seenPeerIDs[peerID] = struct{}{}
+		peerIDs = append(peerIDs, peerID)
+	}
+	block.PeerIDs = peerIDs
+
+	ports := make([]int, 0, len(block.Ports))
+	seenPorts := make(map[int]struct{}, len(block.Ports))
+	for _, port := range block.Ports {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("bt.block.ports entry %d must be between 1 and 65535", port)
+		}
+		if _, exists := seenPorts[port]; exists {
+			continue
+		}
+		seenPorts[port] = struct{}{}
+		ports = append(ports, port)
+	}
+	block.Ports = ports
+
+	networks := make([]string, 0, len(block.Networks))
+	seenNetworks := make(map[string]struct{}, len(block.Networks))
+	for _, entry := range block.Networks {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			if _, _, err := net.ParseCIDR(entry); err != nil {
+				return fmt.Errorf("bt.block.networks entry %q must be a valid CIDR", entry)
+			}
+		} else if net.ParseIP(entry) == nil {
+			return fmt.Errorf("bt.block.networks entry %q must be an IP or CIDR", entry)
+		}
+		if _, exists := seenNetworks[entry]; exists {
+			continue
+		}
+		seenNetworks[entry] = struct{}{}
+		networks = append(networks, entry)
+	}
+	block.Networks = networks
+	return nil
+}
+
+func (c BTConfig) engineRoot() string {
+	if strings.TrimSpace(c.EngineDir) != "" {
+		return c.EngineDir
+	}
+	return c.DownloadDir
+}
+
+// ResolveTaskDir safely resolves a task subdirectory beneath the engine root.
+func (c BTConfig) ResolveTaskDir(subdirectory string) (string, error) {
+	root := c.engineRoot()
+	subdirectory = strings.TrimSpace(subdirectory)
+	if subdirectory == "" || subdirectory == "." {
+		return root, nil
+	}
+	if filepath.IsAbs(subdirectory) {
+		return "", errors.New("download subdirectory must be relative")
+	}
+	resolved := filepath.Clean(filepath.Join(root, subdirectory))
+	relative, err := filepath.Rel(root, resolved)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("download subdirectory escapes configured root")
+	}
+	return resolved, nil
+}
+
+// RelativeTaskDir returns a safe path suitable for API responses.
+func (c BTConfig) RelativeTaskDir(path string) (string, error) {
+	relative, err := filepath.Rel(c.engineRoot(), filepath.Clean(path))
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("task path is outside configured root")
+	}
+	if relative == "." {
+		return "", nil
+	}
+	return filepath.ToSlash(relative), nil
 }
 
 func expandStorage(storage StorageConfig) (StorageConfig, error) {

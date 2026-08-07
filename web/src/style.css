@@ -483,7 +483,16 @@ th {
   margin: 20px 0 12px;
 }
 
-.bt-toolbar button {
+.file-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 180px auto;
+  gap: 10px;
+  margin: 20px 0 12px;
+}
+
+.bt-toolbar button,
+.file-toolbar button,
+.file-toolbar .upload-label {
   margin: 0;
 }
 
@@ -951,7 +960,8 @@ button.linkish {
     font-size: 13px;
   }
 
-  .bt-toolbar {
+  .bt-toolbar,
+  .file-toolbar {
     grid-template-columns: 1fr;
   }
 

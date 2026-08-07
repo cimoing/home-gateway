@@ -1,3 +1,22 @@
+bt:
+  # When true, the BT UI is shown and the API proxies Transmission RPC.
+  enable: false
+  # download_dir is the path as seen by transmission-daemon (not this process).
+  download_dir: /downloads
+  listen_port: 51413
+  # download_limit_bps: 10M
+  # upload_limit_bps: 1M
+  # seed_ratio_limit: 2
+  transmission:
+    url: http://127.0.0.1:9091/transmission/rpc
+    # username: tr
+    # password: ${TRANSMISSION_RPC_PASSWORD}
+  # block:
+  #   clients: []
+  #   peer_ids: []
+  #   ports: []
+  #   networks: []
+
 storage:
   backends:
     - name: local

@@ -13,8 +13,49 @@ func TestMissingOptionalConfigUsesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if config.BT.Enable {
+		t.Fatal("expected bt.enable default false")
+	}
+	if config.BT.Transmission.URL != DefaultTransmissionURL {
+		t.Fatalf("unexpected transmission url %q", config.BT.Transmission.URL)
+	}
 	if len(config.Storage.Backends) != 0 || len(config.DNS.Cloudflare.Zones) != 0 {
 		t.Fatalf("unexpected defaults: %+v", config)
+	}
+}
+
+func TestBTEnableTransmissionConfig(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DATA", root)
+	t.Setenv("TRANSMISSION_RPC_PASSWORD", "rpc-pass")
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+bt:
+  enable: true
+  download_dir: /var/lib/transmission/downloads
+  listen_port: 51413
+  transmission:
+    url: http://transmission:9091/transmission/rpc
+    username: tr
+    password: ${TRANSMISSION_RPC_PASSWORD}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Load(configPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.BT.Enable {
+		t.Fatal("expected enable true")
+	}
+	if config.BT.EngineDir != "/var/lib/transmission/downloads" {
+		t.Fatalf("engine dir %q", config.BT.EngineDir)
+	}
+	if config.BT.Transmission.URL != "http://transmission:9091/transmission/rpc" {
+		t.Fatalf("url %q", config.BT.Transmission.URL)
+	}
+	if config.BT.Transmission.Username != "tr" || config.BT.Transmission.Password != "rpc-pass" {
+		t.Fatalf("auth %#v", config.BT.Transmission)
 	}
 }
 

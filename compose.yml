@@ -14,6 +14,7 @@ services:
       # S3_ACCESS_KEY: ""
       # S3_SECRET_KEY: ""
       # CF_API_TOKEN: ""
+      # TRANSMISSION_RPC_PASSWORD: ""
     ports:
       - "${APP_PORT:-8080}:8080"
     volumes:
@@ -22,6 +23,29 @@ services:
     networks:
       - default
     stop_grace_period: 30s
+
+  # Optional remote BT engine. Enable with: docker compose --profile transmission up -d
+  # Then set bt.enable: true and bt.transmission.url: http://transmission:9091/transmission/rpc
+  transmission:
+    profiles: ["transmission"]
+    image: linuxserver/transmission:latest
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Asia/Shanghai
+      USER: "${TRANSMISSION_RPC_USER:-}"
+      PASS: "${TRANSMISSION_RPC_PASSWORD:-}"
+      PEERPORT: "${BT_PEER_PORT:-51413}"
+    ports:
+      - "${BT_PEER_PORT:-51413}:${BT_PEER_PORT:-51413}"
+      - "${BT_PEER_PORT:-51413}:${BT_PEER_PORT:-51413}/udp"
+      - "127.0.0.1:${TRANSMISSION_RPC_PORT:-9091}:9091"
+    volumes:
+      - ${DATA_DIR:-./data}/transmission/config:/config
+      - ${DATA_DIR:-./data}/downloads:/downloads
+    networks:
+      - default
 
 networks:
   default:

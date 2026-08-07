@@ -129,7 +129,7 @@ func TestServiceTaskLifecycleAndSafeDataDelete(t *testing.T) {
 	}
 	engine := newFakeEngine()
 	service := NewService(db, engine, appconfig.BTConfig{
-		Enabled: true, DownloadDir: root, ListenPort: 42069,
+		Enable: true, DownloadDir: root, EngineDir: root, ListenPort: 51413,
 	}, "")
 	defer service.Close()
 

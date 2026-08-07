@@ -8,6 +8,9 @@ const (
 	BTStatePaused      = "paused"
 	BTStateCompleted   = "completed"
 	BTStateError       = "error"
+
+	// BTSyncNone is written to legacy bt_* sync columns (storage sync removed).
+	BTSyncNone = "none"
 )
 
 // BTTask stores restart-safe BitTorrent task intent and metadata.

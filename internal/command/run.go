@@ -7,8 +7,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
+	"home-gateway/internal/bt"
 	appconfig "home-gateway/internal/config"
 	"home-gateway/internal/dns"
 	"home-gateway/internal/router"
@@ -47,6 +49,44 @@ func runServer(cmd *cobra.Command) error {
 	defer db.Close()
 	log.Printf("database ready using %s", driver)
 
+	var btEnabled atomic.Bool
+	btEnabled.Store(config.BT.Enable)
+
+	var engine bt.Engine
+	var btService *bt.Service
+	if config.BT.Enable {
+		block := bt.BlockConfig{
+			Clients:  append([]string(nil), config.BT.Block.Clients...),
+			PeerIDs:  append([]string(nil), config.BT.Block.PeerIDs...),
+			Ports:    append([]int(nil), config.BT.Block.Ports...),
+			Networks: append([]string(nil), config.BT.Block.Networks...),
+		}
+		transmission, err := bt.NewTransmissionEngine(
+			config.BT.Transmission.URL,
+			config.BT.Transmission.Username,
+			config.BT.Transmission.Password,
+			config.BT.EngineDir,
+			config.BT.ListenPort,
+			config.BT.DownloadLimitBps.Int64(),
+			config.BT.UploadLimitBps.Int64(),
+			block,
+		)
+		if err != nil {
+			return fmt.Errorf("connect transmission RPC: %w", err)
+		}
+		engine = transmission
+		log.Printf("BT enabled via transmission RPC url=%s", config.BT.Transmission.URL)
+		btService = bt.NewService(db, engine, config.BT, configPath)
+		defer func() {
+			if err := btService.Close(); err != nil {
+				log.Printf("BitTorrent shutdown failed: %v", err)
+			}
+		}()
+		if err := btService.Restore(cmd.Context()); err != nil {
+			return fmt.Errorf("restore BitTorrent tasks: %w", err)
+		}
+	}
+
 	storageService := storage.NewService(config.Storage.Backends)
 	syncScheduler := storage.NewScheduler(storageService)
 	storageService.SetScheduler(syncScheduler)
@@ -66,6 +106,12 @@ func runServer(cmd *cobra.Command) error {
 			return err
 		}
 		dnsService.Replace(reloaded.DNS.Cloudflare)
+		btEnabled.Store(reloaded.BT.Enable)
+		if btService != nil {
+			btService.ApplyConfig(reloaded.BT)
+		} else if reloaded.BT.Enable {
+			log.Printf("bt.enable became true; restart the process to connect Transmission RPC")
+		}
 		log.Printf("configuration reloaded from %s", configPath)
 		return nil
 	}
@@ -79,9 +125,13 @@ func runServer(cmd *cobra.Command) error {
 		Addr: address,
 		Handler: router.NewWithServices(router.Services{
 			Database: db,
-			Storage:  storageService,
-			DNS:      dnsService,
-			Reload:   reload,
+			BT:       btService,
+			Features: func() router.Features {
+				return router.Features{BT: btEnabled.Load()}
+			},
+			Storage: storageService,
+			DNS:     dnsService,
+			Reload:  reload,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

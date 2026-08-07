@@ -6,10 +6,11 @@
 
 ```text
 cmd/server/        Go 服务入口
-internal/config/   YAML 配置（存储 / DNS）
-internal/database/ SQLite（用户会话）迁移
+internal/config/   YAML 配置（BT RPC / 存储 / DNS）
+internal/database/ SQLite（用户与 BT 任务状态）迁移
 internal/cloudflare/ Cloudflare v4 HTTP 客户端
 internal/dns/      DNS 管理（远程 + 内存缓存）
+internal/bt/       Transmission RPC 中转
 internal/storage/  配置驱动的存储后端与定时同步
 internal/model/    数据模型
 internal/router/   Gin 路由
@@ -87,6 +88,11 @@ docker compose ps
 ```
 
 Web 地址为 `http://localhost:8080`（仅暴露 HTTP 端口）。
+
+可选：`docker compose --profile transmission up -d` 启动 Transmission，并在
+`config.yaml` 中设置 `bt.enable: true` 与
+`bt.transmission.url: http://transmission:9091/transmission/rpc`。BT 流量由
+transmission 服务发布 peer 端口，home-gateway 本身不监听 BT 端口。
 
 容器通过 `DATA=/data` 设置数据根目录；配置与数据中的默认路径均为相对路径：
 
@@ -186,13 +192,18 @@ docker run --rm -it `
 
 默认读取 `/config/config.yaml`（见 `config.example.yaml`）：
 
+- `bt.enable`：为 `true` 时显示「BT 下载」模块，并通过后端转发 **Transmission RPC**
+  - `bt.transmission.url` / `username` / `password`：远程 daemon 地址（可用 `${ENV}`）
+  - `bt.download_dir`：transmission 侧下载路径（按 daemon 所见路径填写）
+  - `bt.listen_port`：通过 RPC 设置的 peer 端口（本进程不监听 BT 端口）
+  - `GET /api/system/features`：返回 `{ features: { bt } }` 供前端决定是否展示模块
 - `storage.backends[]`：按**名称**定义 local / smb / s3；密钥用 `${ENV}`
   - Web「存储管理 → 同步」支持任意两个后端之间的双栏目录对比与复制（`POST /api/storage/sync/jobs`）
   - `storage.sync[]`：定时增量同步（crontab `interval` + `src`/`dst`）；页面可查看规则列表并以「立即同步」手动触发（`GET/POST /api/storage/sync/schedules`）
 - `dns.cloudflare.token` / `zones`：Cloudflare 连接与托管域名列表
 
 修改连接类配置后，可调用 `POST /api/system/reload-config`（需登录）热加载，无需
-重启进程。存储后端不在 Web UI 中增删改。
+重启进程。`bt.enable` 从关到开需要重启进程以建立 RPC 连接。存储后端不在 Web UI 中增删改。
 
 ## Cloudflare DNS 管理
 
@@ -218,6 +229,12 @@ API Token 建议最小权限：
 - 浏览、上传、删除文件与目录
 - 双栏对比任意两个后端并复制
 - 查看 / 手动触发 `storage.sync[]` 定时增量同步规则
+
+## BT 下载（Transmission RPC）
+
+当 `bt.enable: true` 时，前端显示「BT 下载」模块；任务列表、进度与控制均通过
+`/api/bt/*` 由本服务转发到远程 Transmission RPC，本进程不嵌入 BT 引擎、不监听
+BT 端口。
 
 配置位于 `/config`；数据库位于 `DATA` 下的 `db/`，升级或迁移前应备份该目录与配置。
 
