@@ -38,7 +38,7 @@ RUN set -eux; \
     url="https://github.com/${REPO}/releases/download/${tag}/${asset}"; \
     curl -fsSL -o "/tmp/${asset}" "${url}"; \
     echo "${SHA256}  /tmp/${asset}" | sha256sum -c -; \
-    mkdir -p /out/app /out/config /out/data/db /out/data/bt/downloads; \
+    mkdir -p /out/app /out/config /out/data/db /out/data/downloads; \
     unzip -q "/tmp/${asset}" -d /tmp/release; \
     install -m 0755 "/tmp/release/home-gateway-linux-${arch}/home-gateway" /out/app/home-gateway; \
     if [ -f "/tmp/release/home-gateway-linux-${arch}/config.example.yaml" ]; then \
@@ -59,7 +59,7 @@ ENV GIN_MODE=release \
     DATA=/data \
     DB_DRIVER=sqlite
 
-EXPOSE 8080 42069/tcp 42069/udp
+EXPOSE 8080
 
 VOLUME ["/config", "/data"]
 

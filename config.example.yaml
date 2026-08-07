@@ -1,34 +1,9 @@
-bt:
-  enabled: true
-  # Engine: anacrolix (default) or transmission.
-  # engine: anacrolix
-  # transmission:
-  #   url: http://127.0.0.1:9091/transmission/rpc
-  #   # Docker Compose: http://transmission:9091/transmission/rpc
-  #   username: ""
-  #   password: ${TRANSMISSION_RPC_PASSWORD}
-  # Relative to DATA (default "." / container "/data").
-  download_dir: bt/downloads
-  listen_port: 42069
-  # 0 = unlimited. Human rates: 512K, 10M, 1G.
-  download_limit_bps: 0
-  upload_limit_bps: 0
-  # 0 = disabled; pause seeding when share ratio reaches this value.
-  seed_ratio_limit: 0
-  # Peer blocklist (hot-reloadable). client/peer-id/port rules need anacrolix;
-  # transmission only stores them (use daemon blocklist for IP denial).
-  # block:
-  #   clients: [Xunlei, XL]
-  #   peer_ids: ["-qB4500-........"]
-  #   ports: [6881]
-  #   networks: [203.0.113.0/24, 198.51.100.10]
-
 storage:
   backends:
     - name: local
       type: local
       config:
-        root: bt/downloads
+        root: downloads
     # - name: nas
     #   type: smb
     #   config:

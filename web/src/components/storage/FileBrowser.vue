@@ -132,7 +132,7 @@ async function run(action: () => Promise<void>, success = '') {
       <h2>文件浏览</h2>
       <p>在已配置的存储后端上浏览、上传与删除文件。</p>
     </div>
-    <div class="bt-toolbar">
+    <div class="file-toolbar">
       <select v-model="backendName">
         <option v-for="backend in backends" :key="backend.name" :value="backend.name">
           {{ backend.name }} ({{ backend.type }})

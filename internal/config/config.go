@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,54 +14,14 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-const (
-	DefaultPath            = "/config/config.yaml"
-	DefaultDownloadDir     = "bt/downloads"
-	DefaultListenPort      = 42069
-	DefaultBTEngine        = "anacrolix"
-	BTEngineAnacrolix      = "anacrolix"
-	BTEngineTransmission   = "transmission"
-	DefaultTransmissionURL = "http://127.0.0.1:9091/transmission/rpc"
-)
+const DefaultPath = "/config/config.yaml"
 
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 
 // Config contains file-backed application settings.
 type Config struct {
-	BT      BTConfig      `yaml:"bt" json:"bt"`
 	Storage StorageConfig `yaml:"storage" json:"storage"`
 	DNS     DNSConfig     `yaml:"dns" json:"dns"`
-}
-
-// BTConfig controls the BitTorrent download engine.
-type BTConfig struct {
-	Enabled          bool               `yaml:"enabled" json:"enabled"`
-	Engine           string             `yaml:"engine" json:"engine"`
-	Transmission     TransmissionConfig `yaml:"transmission" json:"transmission"`
-	DownloadDir      string             `yaml:"download_dir" json:"downloadDir"`
-	ListenPort       int                `yaml:"listen_port" json:"listenPort"`
-	DownloadLimitBps ByteRate           `yaml:"download_limit_bps" json:"downloadLimitBps"`
-	UploadLimitBps   ByteRate           `yaml:"upload_limit_bps" json:"uploadLimitBps"`
-	SeedRatioLimit   float64            `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
-	Block            BTBlockConfig      `yaml:"block" json:"block"`
-
-	// EngineDir is the absolute local filesystem root used by the torrent engine.
-	EngineDir string `yaml:"-" json:"-"`
-}
-
-// TransmissionConfig configures the optional transmission-daemon RPC backend.
-type TransmissionConfig struct {
-	URL      string `yaml:"url" json:"url"`
-	Username string `yaml:"username" json:"username"`
-	Password string `yaml:"password" json:"password,omitempty"`
-}
-
-// BTBlockConfig lists peers to reject by client, peer ID, port, or IP/CIDR.
-type BTBlockConfig struct {
-	Clients  []string `yaml:"clients" json:"clients"`
-	PeerIDs  []string `yaml:"peer_ids" json:"peerIds"`
-	Ports    []int    `yaml:"ports" json:"ports"`
-	Networks []string `yaml:"networks" json:"networks"`
 }
 
 // StorageConfig holds named storage backends from YAML.
@@ -74,10 +33,10 @@ type StorageConfig struct {
 
 // StorageSyncRule is one cron-scheduled incremental sync from src to dst.
 type StorageSyncRule struct {
-	Interval string                `yaml:"interval" json:"interval"`
-	Src      StorageSyncEndpoint   `yaml:"src" json:"src"`
-	Dst      StorageSyncEndpoint   `yaml:"dst" json:"dst"`
-	Enabled  *bool                 `yaml:"enabled" json:"enabled"`
+	Interval string              `yaml:"interval" json:"interval"`
+	Src      StorageSyncEndpoint `yaml:"src" json:"src"`
+	Dst      StorageSyncEndpoint `yaml:"dst" json:"dst"`
+	Enabled  *bool               `yaml:"enabled" json:"enabled"`
 }
 
 // StorageSyncEndpoint names a backend and relative directory/file path.
@@ -108,13 +67,7 @@ type CloudflareConfig struct {
 
 // Default returns safe settings when the default config file is absent.
 func Default() Config {
-	return Config{BT: BTConfig{
-		Enabled:      true,
-		Engine:       DefaultBTEngine,
-		Transmission: TransmissionConfig{URL: DefaultTransmissionURL},
-		DownloadDir:  DefaultDownloadDir,
-		ListenPort:   DefaultListenPort,
-	}}
+	return Config{}
 }
 
 // Load parses a YAML file. A missing non-required file uses defaults.
@@ -123,14 +76,14 @@ func Load(path string, required bool) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) && !required {
-			return normalize(config, path)
+			return normalize(config)
 		}
 		return Config{}, fmt.Errorf("read config file: %w", err)
 	}
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return Config{}, fmt.Errorf("parse config file: %w", err)
 	}
-	return normalize(config, path)
+	return normalize(config)
 }
 
 // Save writes the current configuration as YAML.
@@ -175,66 +128,12 @@ func ExpandEnv(value string) (string, error) {
 	return expanded, nil
 }
 
-func normalize(config Config, configPath string) (Config, error) {
-	if strings.TrimSpace(config.BT.DownloadDir) == "" {
-		config.BT.DownloadDir = DefaultDownloadDir
-	}
-	if config.BT.ListenPort == 0 {
-		config.BT.ListenPort = DefaultListenPort
-	}
-	if config.BT.ListenPort < 1 || config.BT.ListenPort > 65535 {
-		return Config{}, errors.New("bt.listen_port must be between 1 and 65535")
-	}
-	engine := strings.ToLower(strings.TrimSpace(config.BT.Engine))
-	if engine == "" {
-		engine = DefaultBTEngine
-	}
-	switch engine {
-	case BTEngineAnacrolix, BTEngineTransmission:
-		config.BT.Engine = engine
-	default:
-		return Config{}, errors.New("bt.engine must be anacrolix or transmission")
-	}
-	if strings.TrimSpace(config.BT.Transmission.URL) == "" {
-		config.BT.Transmission.URL = DefaultTransmissionURL
-	}
-	if expanded, err := ExpandEnv(config.BT.Transmission.URL); err != nil {
-		return Config{}, fmt.Errorf("bt.transmission.url: %w", err)
-	} else {
-		config.BT.Transmission.URL = expanded
-	}
-	if config.BT.Transmission.Username != "" {
-		if expanded, err := ExpandEnv(config.BT.Transmission.Username); err != nil {
-			return Config{}, fmt.Errorf("bt.transmission.username: %w", err)
-		} else {
-			config.BT.Transmission.Username = expanded
-		}
-	}
-	if config.BT.Transmission.Password != "" {
-		if expanded, err := ExpandEnv(config.BT.Transmission.Password); err != nil {
-			return Config{}, fmt.Errorf("bt.transmission.password: %w", err)
-		} else {
-			config.BT.Transmission.Password = expanded
-		}
-	}
-	if config.BT.DownloadLimitBps < 0 || config.BT.UploadLimitBps < 0 {
-		return Config{}, errors.New("bt rate limits must be zero or positive")
-	}
-	if config.BT.SeedRatioLimit < 0 {
-		return Config{}, errors.New("bt.seed_ratio_limit must be zero or positive")
-	}
-	if err := normalizeBTBlock(&config.BT.Block); err != nil {
-		return Config{}, err
-	}
+func normalize(config Config) (Config, error) {
 	expanded, err := expandStorage(config.Storage)
 	if err != nil {
 		return Config{}, err
 	}
 	config.Storage = expanded
-
-	if err := resolveBTPaths(&config); err != nil {
-		return Config{}, err
-	}
 
 	dnsExpanded, err := expandDNS(config.DNS)
 	if err != nil {
@@ -242,84 +141,6 @@ func normalize(config Config, configPath string) (Config, error) {
 	}
 	config.DNS = dnsExpanded
 	return config, nil
-}
-
-func resolveBTPaths(config *Config) error {
-	downloadDir := strings.TrimSpace(config.BT.DownloadDir)
-	if downloadDir == "" {
-		downloadDir = DefaultDownloadDir
-	}
-	absolute, err := datadir.Resolve(downloadDir)
-	if err != nil {
-		return fmt.Errorf("resolve bt.download_dir: %w", err)
-	}
-	config.BT.DownloadDir = absolute
-	config.BT.EngineDir = absolute
-	return nil
-}
-
-func normalizeBTBlock(block *BTBlockConfig) error {
-	clients := make([]string, 0, len(block.Clients))
-	for _, client := range block.Clients {
-		client = strings.TrimSpace(client)
-		if client == "" {
-			continue
-		}
-		clients = append(clients, client)
-	}
-	block.Clients = clients
-
-	peerIDs := make([]string, 0, len(block.PeerIDs))
-	seenPeerIDs := make(map[string]struct{}, len(block.PeerIDs))
-	for _, peerID := range block.PeerIDs {
-		peerID = strings.TrimSpace(peerID)
-		if peerID == "" {
-			continue
-		}
-		if _, exists := seenPeerIDs[peerID]; exists {
-			continue
-		}
-		seenPeerIDs[peerID] = struct{}{}
-		peerIDs = append(peerIDs, peerID)
-	}
-	block.PeerIDs = peerIDs
-
-	ports := make([]int, 0, len(block.Ports))
-	seenPorts := make(map[int]struct{}, len(block.Ports))
-	for _, port := range block.Ports {
-		if port < 1 || port > 65535 {
-			return fmt.Errorf("bt.block.ports entry %d must be between 1 and 65535", port)
-		}
-		if _, exists := seenPorts[port]; exists {
-			continue
-		}
-		seenPorts[port] = struct{}{}
-		ports = append(ports, port)
-	}
-	block.Ports = ports
-
-	networks := make([]string, 0, len(block.Networks))
-	seenNetworks := make(map[string]struct{}, len(block.Networks))
-	for _, entry := range block.Networks {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		if strings.Contains(entry, "/") {
-			if _, _, err := net.ParseCIDR(entry); err != nil {
-				return fmt.Errorf("bt.block.networks entry %q must be a valid CIDR", entry)
-			}
-		} else if net.ParseIP(entry) == nil {
-			return fmt.Errorf("bt.block.networks entry %q must be an IP or CIDR", entry)
-		}
-		if _, exists := seenNetworks[entry]; exists {
-			continue
-		}
-		seenNetworks[entry] = struct{}{}
-		networks = append(networks, entry)
-	}
-	block.Networks = networks
-	return nil
 }
 
 func expandStorage(storage StorageConfig) (StorageConfig, error) {
@@ -470,41 +291,4 @@ func expandDNS(dns DNSConfig) (DNSConfig, error) {
 		return DNSConfig{}, errors.New("dns.cloudflare.token is required when zones are configured")
 	}
 	return dns, nil
-}
-
-func (c BTConfig) engineRoot() string {
-	if strings.TrimSpace(c.EngineDir) != "" {
-		return c.EngineDir
-	}
-	return c.DownloadDir
-}
-
-// ResolveTaskDir safely resolves a task subdirectory beneath the engine root.
-func (c BTConfig) ResolveTaskDir(subdirectory string) (string, error) {
-	root := c.engineRoot()
-	subdirectory = strings.TrimSpace(subdirectory)
-	if subdirectory == "" || subdirectory == "." {
-		return root, nil
-	}
-	if filepath.IsAbs(subdirectory) {
-		return "", errors.New("download subdirectory must be relative")
-	}
-	resolved := filepath.Clean(filepath.Join(root, subdirectory))
-	relative, err := filepath.Rel(root, resolved)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", errors.New("download subdirectory escapes configured root")
-	}
-	return resolved, nil
-}
-
-// RelativeTaskDir returns a safe path suitable for API responses.
-func (c BTConfig) RelativeTaskDir(path string) (string, error) {
-	relative, err := filepath.Rel(c.engineRoot(), filepath.Clean(path))
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", errors.New("task path is outside configured root")
-	}
-	if relative == "." {
-		return "", nil
-	}
-	return filepath.ToSlash(relative), nil
 }

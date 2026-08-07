@@ -7,10 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
-	"home-gateway/internal/bt"
 	appconfig "home-gateway/internal/config"
 	"home-gateway/internal/dns"
 	"home-gateway/internal/router"
@@ -49,49 +47,6 @@ func runServer(cmd *cobra.Command) error {
 	defer db.Close()
 	log.Printf("database ready using %s", driver)
 
-	var engine bt.Engine
-	if config.BT.Enabled {
-		if err := ensureWritableDirectory(config.BT.EngineDir); err != nil {
-			return err
-		}
-		block := bt.BlockConfig{
-			Clients:  append([]string(nil), config.BT.Block.Clients...),
-			PeerIDs:  append([]string(nil), config.BT.Block.PeerIDs...),
-			Ports:    append([]int(nil), config.BT.Block.Ports...),
-			Networks: append([]string(nil), config.BT.Block.Networks...),
-		}
-		switch config.BT.Engine {
-		case appconfig.BTEngineTransmission:
-			transmission, err := bt.NewTransmissionEngine(
-				config.BT.Transmission.URL,
-				config.BT.Transmission.Username,
-				config.BT.Transmission.Password,
-				config.BT.EngineDir,
-				config.BT.ListenPort,
-				config.BT.DownloadLimitBps.Int64(),
-				config.BT.UploadLimitBps.Int64(),
-				block,
-			)
-			if err != nil {
-				return err
-			}
-			engine = transmission
-			log.Printf("BT engine=transmission rpc=%s", config.BT.Transmission.URL)
-		default:
-			anacrolix, err := bt.NewAnacrolixEngine(
-				config.BT.EngineDir,
-				config.BT.ListenPort,
-				config.BT.DownloadLimitBps.Int64(),
-				config.BT.UploadLimitBps.Int64(),
-				block,
-			)
-			if err != nil {
-				return err
-			}
-			engine = anacrolix
-			log.Printf("BT engine=anacrolix listen_port=%d", config.BT.ListenPort)
-		}
-	}
 	storageService := storage.NewService(config.Storage.Backends)
 	syncScheduler := storage.NewScheduler(storageService)
 	storageService.SetScheduler(syncScheduler)
@@ -100,15 +55,6 @@ func runServer(cmd *cobra.Command) error {
 	}
 	defer syncScheduler.Stop()
 	dnsService := dns.NewService(config.DNS.Cloudflare)
-	btService := bt.NewService(db, engine, config.BT, configPath)
-	defer func() {
-		if err := btService.Close(); err != nil {
-			log.Printf("BitTorrent shutdown failed: %v", err)
-		}
-	}()
-	if err := btService.Restore(cmd.Context()); err != nil {
-		return fmt.Errorf("restore BitTorrent tasks: %w", err)
-	}
 
 	reload := func() error {
 		reloaded, err := appconfig.Load(configPath, true)
@@ -120,7 +66,6 @@ func runServer(cmd *cobra.Command) error {
 			return err
 		}
 		dnsService.Replace(reloaded.DNS.Cloudflare)
-		btService.ApplyConfig(reloaded.BT)
 		log.Printf("configuration reloaded from %s", configPath)
 		return nil
 	}
@@ -134,7 +79,6 @@ func runServer(cmd *cobra.Command) error {
 		Addr: address,
 		Handler: router.NewWithServices(router.Services{
 			Database: db,
-			BT:       btService,
 			Storage:  storageService,
 			DNS:      dnsService,
 			Reload:   reload,
@@ -161,28 +105,6 @@ func runServer(cmd *cobra.Command) error {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("server shutdown failed: %w", err)
-	}
-	return nil
-}
-
-func ensureWritableDirectory(path string) error {
-	if err := os.MkdirAll(path, 0o750); err != nil {
-		return fmt.Errorf("create download directory: %w", err)
-	}
-	probe, err := os.CreateTemp(path, ".home-gateway-write-test-*")
-	if err != nil {
-		return fmt.Errorf("download directory is not writable: %w", err)
-	}
-	name := probe.Name()
-	if err := probe.Close(); err != nil {
-		return fmt.Errorf("close download directory probe: %w", err)
-	}
-	if err := os.Remove(name); err != nil {
-		return fmt.Errorf("remove download directory probe: %w", err)
-	}
-	absolute, err := filepath.Abs(path)
-	if err == nil {
-		log.Printf("BitTorrent downloads stored under %s", absolute)
 	}
 	return nil
 }

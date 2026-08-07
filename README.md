@@ -1,19 +1,19 @@
 # Home Gateway
 
-基于 Go、Gin、Vue 3、Vite 和 TypeScript 的单仓库项目。
+基于 Go、Gin、Vue 3、Vite 和 TypeScript 的单仓库项目。提供存储管理（浏览 / 跨后端同步）与 Cloudflare DNS 管理。
 
 ## 目录结构
 
 ```text
-cmd/server/       Go 服务入口
-internal/config/  YAML 配置（BT / 存储 / DNS 连接）
-internal/database/ SQLite（用户与 BT 状态）迁移
+cmd/server/        Go 服务入口
+internal/config/   YAML 配置（存储 / DNS）
+internal/database/ SQLite（用户会话）迁移
 internal/cloudflare/ Cloudflare v4 HTTP 客户端
 internal/dns/      DNS 管理（远程 + 内存缓存）
-internal/storage/  配置驱动的存储后端
+internal/storage/  配置驱动的存储后端与定时同步
 internal/model/    数据模型
-internal/router/  Gin 路由
-web/              Vue 前端
+internal/router/   Gin 路由
+web/               Vue 前端
 ```
 
 ## 本地编译
@@ -86,7 +86,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Web 地址为 `http://localhost:8080`，默认嵌入式引擎（`anacrolix`）使用 `42069/tcp` 与 `42069/udp`。
+Web 地址为 `http://localhost:8080`（仅暴露 HTTP 端口）。
 
 容器通过 `DATA=/data` 设置数据根目录；配置与数据中的默认路径均为相对路径：
 
@@ -95,13 +95,7 @@ Web 地址为 `http://localhost:8080`，默认嵌入式引擎（`anacrolix`）�
 | 配置文件 | `/config/config.yaml`（主机 `./config`） |
 | 数据根 `DATA` | `/data`（主机 `./data`） |
 | SQLite | `$DATA/db/home-gateway.db` |
-| 下载目录 | `$DATA/bt/downloads` |
-
-可选：使用 Compose profile `transmission` 启动 `transmission-daemon`，并在
-`config.yaml` 中设置 `bt.engine: transmission` 与
-`bt.transmission.url: http://transmission:9091/transmission/rpc`。此时请去掉
-`app` 服务上的 BT 端口映射，改由 `transmission` 服务发布 `BT_PORT`，且两边共用
-同一 `DATA` 卷，使引擎本地下载路径一致。
+| 本地存储示例 | `$DATA/downloads`（见 `storage.backends`） |
 
 查看日志和停止服务：
 
@@ -137,7 +131,7 @@ docker compose -f compose.test.yml down -v
 - `DB_DRIVER`：仅允许 `sqlite`（默认）
 - `DB_DSN`：SQLite 路径，默认相对路径 `db/home-gateway.db`（相对 `DATA`）
 
-服务启动时会自动执行嵌入式 SQLite 迁移。用户密码与 BT 任务状态保存在该库中。
+服务启动时会自动执行嵌入式 SQLite 迁移。用户密码保存在该库中。
 
 ## 命令行
 
@@ -192,12 +186,6 @@ docker run --rm -it `
 
 默认读取 `/config/config.yaml`（见 `config.example.yaml`）：
 
-- `bt.*`：下载引擎参数（部分可在 Web 设置页写回）
-  - `bt.engine`：`anacrolix`（默认，进程内）或 `transmission`（RPC 连接 daemon）
-  - `bt.transmission.url` / `username` / `password`：仅 `engine=transmission` 时需要
-  - `bt.download_dir`：相对 `DATA` 的本地下载路径（默认 `bt/downloads`）
-  - `bt.block`：屏蔽规则（客户端、Peer ID、端口、IP/CIDR）；Peers 列表右键可追加，支持热加载；`transmission` 引擎下客户端/Peer ID/端口规则不会在握手层强制生效
-  - `POST /api/bt/block`：追加一条屏蔽规则并写回 YAML
 - `storage.backends[]`：按**名称**定义 local / smb / s3；密钥用 `${ENV}`
   - Web「存储管理 → 同步」支持任意两个后端之间的双栏目录对比与复制（`POST /api/storage/sync/jobs`）
   - `storage.sync[]`：定时增量同步（crontab `interval` + `src`/`dst`）；页面可查看规则列表并以「立即同步」手动触发（`GET/POST /api/storage/sync/schedules`）
@@ -223,42 +211,15 @@ API Token 建议最小权限：
 - `POST /zones/:zoneName/sync`：手动全量刷新记录
 - `/zones/:zoneName/records`：读取缓存以及远程记录增删改查
 
-## BT 下载管理
+## 存储管理
 
-默认使用进程内嵌的 `anacrolix/torrent`；也可通过 `bt.engine: transmission` 对接
-本机或 Compose 中的 `transmission-daemon`（RPC）。两种引擎均支持磁力链接和
-`.torrent` 文件、任务列表与实时进度、暂停/恢复、文件选择及优先级、删除任务以及
-可选删除下载数据。任务状态和文件选择保存在数据库中，服务重启后会自动恢复并续传。
-Web 管理接口均要求登录。
+在 `storage.backends` 中声明 local / smb / s3 后端后，Web「存储管理」可：
 
-BT 仅下载到本机 `bt.download_dir`。跨存储复制请使用「存储管理 → 同步」双栏界面，
-在任意两个已配置后端之间对比目录并复制文件/文件夹。
+- 浏览、上传、删除文件与目录
+- 双栏对比任意两个后端并复制
+- 查看 / 手动触发 `storage.sync[]` 定时增量同步规则
 
-BT 任务状态与文件选择保存在 SQLite；下载内容在本地磁盘上。
-
-使用自定义配置文件：
-
-```powershell
-docker run --rm -p 8080:8080 `
-  -p 42069:42069/tcp `
-  -p 42069:42069/udp `
-  -v "${PWD}/config:/config" `
-  -v "${PWD}/data:/data" `
-  home-gateway:latest run
-```
-
-Web 添加任务时可指定相对子目录与存储后端名称。绝对路径和 `..` 目录穿越会被拒绝。
-
-BT API 位于 `/api/bt`：
-
-- `GET /settings`：读取当前只读配置和引擎状态
-- `GET/POST /tasks`：查询任务，或通过 `/tasks/magnet`、`/tasks/torrent` 添加
-- `/tasks/:id/pause|resume`：暂停和恢复
-- `/tasks/:id/files`：查询及更新文件选择和优先级
-- `DELETE /tasks/:id?deleteData=true`：删除任务并可选删除数据
-
-配置位于 `/config`；数据库与下载内容位于 `DATA` 下的相对路径（`db/`、`bt/downloads/`），升级或迁移前应备份这两个目录。
-如修改 `bt.listen_port`，Docker 的 TCP 和 UDP 映射必须同步修改。
+配置位于 `/config`；数据库位于 `DATA` 下的 `db/`，升级或迁移前应备份该目录与配置。
 
 ## 生产镜像
 
@@ -267,8 +228,6 @@ BT API 位于 `/api/bt`：
 ```powershell
 docker build -t home-gateway:latest .
 docker run --rm -p 8080:8080 `
-  -p 42069:42069/tcp `
-  -p 42069:42069/udp `
   -v "${PWD}/config:/config" `
   -v "${PWD}/data:/data" `
   home-gateway:latest run

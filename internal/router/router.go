@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"home-gateway/internal/auth"
-	"home-gateway/internal/bt"
 	"home-gateway/internal/dns"
 	"home-gateway/internal/storage"
 	"home-gateway/internal/webui"
@@ -19,7 +18,6 @@ import (
 // Services bundles runtime dependencies for the HTTP router.
 type Services struct {
 	Database *sqlx.DB
-	BT       *bt.Service
 	Storage  *storage.Service
 	DNS      *dns.Service
 	Reload   func() error
@@ -68,9 +66,6 @@ func newRouter(webFS http.FileSystem, services Services) *gin.Engine {
 		}
 		if services.Storage != nil {
 			storage.NewHandler(services.Storage).Register(protected)
-		}
-		if services.BT != nil {
-			bt.NewHandler(services.BT).Register(protected)
 		}
 		if services.Reload != nil {
 			protected.POST("/system/reload-config", func(c *gin.Context) {

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"home-gateway/internal/bt"
 	appconfig "home-gateway/internal/config"
 	"home-gateway/internal/database"
 	"home-gateway/internal/dns"
@@ -103,29 +102,6 @@ func TestDNSRoutesRequireSession(t *testing.T) {
 		Database: db,
 		DNS:      dns.NewService(appconfig.Default().DNS.Cloudflare),
 	}).ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusUnauthorized {
-		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
-	}
-}
-
-func TestBTRoutesRequireSession(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	db, err := database.Open(context.Background(), database.Config{
-		Driver: database.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "bt-router.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := database.Migrate(context.Background(), db, database.DriverSQLite); err != nil {
-		t.Fatal(err)
-	}
-	service := bt.NewService(db, nil, appconfig.Default().BT, "")
-	defer service.Close()
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/bt/settings", nil)
-	NewWithServices(Services{Database: db, BT: service}).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
 	}
