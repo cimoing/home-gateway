@@ -3,6 +3,7 @@ export interface BTTask {
   infoHash: string
   sourceType: string
   name: string
+  savePath?: string
   saveSubdir: string
   desiredState: string
   status: string

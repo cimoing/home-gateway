@@ -21,7 +21,7 @@ type BTTask struct {
 	SourceValue    string     `db:"source_value" json:"-"`
 	Metainfo       []byte     `db:"metainfo" json:"-"`
 	Name           string     `db:"name" json:"name"`
-	SavePath       string     `db:"save_path" json:"-"`
+	SavePath       string     `db:"save_path" json:"savePath"`
 	SaveSubdir     string     `db:"-" json:"saveSubdir"`
 	StorageBackend string     `db:"storage_backend_name" json:"-"`
 	StoragePrefix  string     `db:"storage_prefix" json:"-"`

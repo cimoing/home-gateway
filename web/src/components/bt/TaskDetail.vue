@@ -235,7 +235,10 @@ onBeforeUnmount(() => {
       <div v-if="activeTab === 'info'" class="detail-tab-panel">
         <dl class="detail-grid">
           <div><dt>Info Hash</dt><dd>{{ task.infoHash }}</dd></div>
-          <div><dt>保存目录</dt><dd>{{ task.saveSubdir || '下载根目录' }}</dd></div>
+          <div>
+            <dt>保存路径</dt>
+            <dd class="path-cell">{{ task.savePath || task.saveSubdir || '下载根目录' }}</dd>
+          </div>
           <div><dt>已上传</dt><dd>{{ formatBytes(task.uploadedBytes) }}</dd></div>
           <div>
             <dt>分享率</dt>
@@ -302,7 +305,11 @@ onBeforeUnmount(() => {
         <div class="file-heading">
           <div>
             <h3>文件选择</h3>
-            <p>已选择 {{ selectedCount }} 个文件，共 {{ formatBytes(selectedBytes) }}</p>
+            <p>
+              保存到
+              <code>{{ task.savePath || task.saveSubdir || '下载根目录' }}</code>
+              · 已选择 {{ selectedCount }} 个文件，共 {{ formatBytes(selectedBytes) }}
+            </p>
           </div>
           <div class="file-heading-actions">
             <button
