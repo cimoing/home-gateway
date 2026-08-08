@@ -118,6 +118,8 @@ onBeforeUnmount(() => {
       </button>
     </header>
     <nav class="module-tabs" aria-label="功能导航">
+      <button :class="{ active: module === 'storage' }" @click="module = 'storage'">存储管理</button>
+      <button :class="{ active: module === 'dns' }" @click="module = 'dns'">DNS 管理</button>
       <button
         v-if="btEnabled"
         :class="{ active: module === 'bt' }"
@@ -125,8 +127,6 @@ onBeforeUnmount(() => {
       >
         BT 下载
       </button>
-      <button :class="{ active: module === 'storage' }" @click="module = 'storage'">存储管理</button>
-      <button :class="{ active: module === 'dns' }" @click="module = 'dns'">DNS 管理</button>
     </nav>
     <BTManager v-if="btEnabled && module === 'bt'" />
     <StorageManager v-else-if="module === 'storage'" />
