@@ -9,6 +9,7 @@ import (
 	"home-gateway/internal/auth"
 	"home-gateway/internal/bt"
 	"home-gateway/internal/dns"
+	"home-gateway/internal/hostmetrics"
 	"home-gateway/internal/storage"
 	"home-gateway/internal/webui"
 
@@ -77,6 +78,9 @@ func newRouter(webFS http.FileSystem, services Services) *gin.Engine {
 				features.BT = true
 			}
 			c.JSON(http.StatusOK, gin.H{"features": features})
+		})
+		protected.GET("/system/metrics", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"metrics": hostmetrics.Collect()})
 		})
 		if services.DNS != nil {
 			dns.NewHandler(services.DNS).Register(protected)

@@ -131,3 +131,25 @@ func TestFeaturesRouteRequiresSession(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
 	}
 }
+
+func TestMetricsRouteRequiresSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := database.Open(context.Background(), database.Config{
+		Driver: database.DriverSQLite,
+		DSN:    filepath.Join(t.TempDir(), "metrics.db"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(context.Background(), db, database.DriverSQLite); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/system/metrics", nil)
+	NewWithServices(Services{Database: db}).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
+	}
+}
