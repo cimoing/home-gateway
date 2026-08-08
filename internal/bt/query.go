@@ -80,21 +80,26 @@ func (s *Service) Files(_ context.Context, taskID int64) ([]model.BTTaskFile, er
 
 func (s *Service) enrichRemote(remote RemoteTorrent) model.BTTask {
 	task := model.BTTask{
-		ID:             remote.ID,
-		InfoHash:       remote.InfoHash,
-		SourceType:     "magnet",
-		Name:           remote.Name,
-		SavePath:       remote.SavePath,
-		DesiredState:   remote.DesiredState,
-		Status:         remote.Status,
-		ErrorMessage:   remote.Error,
-		TotalBytes:     remote.TotalBytes,
-		CompletedBytes: remote.CompletedBytes,
-		UploadedBytes:  remote.UploadedBytes,
-		Peers:          remote.Peers,
-		Ratio:          shareRatio(remote.UploadedBytes, remote.DownloadedBytes, remote.TotalBytes),
-		CreatedAt:      remote.AddedAt,
-		UpdatedAt:      time.Now().UTC(),
+		ID:               remote.ID,
+		InfoHash:         remote.InfoHash,
+		SourceType:       "magnet",
+		Name:             remote.Name,
+		SavePath:         remote.SavePath,
+		DesiredState:     remote.DesiredState,
+		Status:           remote.Status,
+		ErrorMessage:     remote.Error,
+		TotalBytes:       remote.TotalBytes,
+		CompletedBytes:   remote.CompletedBytes,
+		DesiredAvailable: remote.DesiredAvailable,
+		SizeWhenDone:     remote.SizeWhenDone,
+		PercentDone:      remote.PercentDone,
+		AvailablePercent: remote.AvailablePercent,
+		UploadedBytes:    remote.UploadedBytes,
+		Peers:            remote.Peers,
+		Ratio:            shareRatio(remote.UploadedBytes, remote.DownloadedBytes, remote.TotalBytes),
+		MagnetLink:       remote.MagnetLink,
+		CreatedAt:        remote.AddedAt,
+		UpdatedAt:        time.Now().UTC(),
 	}
 	if relative, err := s.config.RelativeTaskDir(remote.SavePath); err == nil {
 		task.SaveSubdir = relative
@@ -156,6 +161,11 @@ func (s *Service) Peers(_ context.Context, taskID int64) ([]PeerInfo, error) {
 	for index := range peers {
 		key := prefix + peers[index].Address + "\x00" + peers[index].PeerID
 		seen[key] = struct{}{}
+		// Transmission peers expose instantaneous rates; keep them unless
+		// cumulative counters are available for sampling.
+		if peers[index].Downloaded == 0 && peers[index].Uploaded == 0 {
+			continue
+		}
 		previous, sampled := s.peerSamples[key]
 		s.peerSamples[key] = rateSample{
 			at: now, downloaded: peers[index].Downloaded, uploaded: peers[index].Uploaded,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '../../api/client'
 import AddTorrentForm from './AddTorrentForm.vue'
 import BTSettingsView from './BTSettings.vue'
@@ -16,6 +16,7 @@ const status = ref<BTStatus | null>(null)
 const selectedTask = ref<BTTask | null>(null)
 const selectedFiles = ref<BTFile[]>([])
 const selectedPeers = ref<BTPeer[]>([])
+const selectedIds = ref<number[]>([])
 const busy = ref(false)
 const loading = ref(true)
 const error = ref('')
@@ -27,6 +28,16 @@ let timer: number | undefined
 let selectionEpoch = 0
 /** Suppresses click-through onto task cards after the detail overlay closes. */
 let ignoreSelectUntil = 0
+
+const selectedTasks = computed(() =>
+  tasks.value.filter((task) => selectedIds.value.includes(task.id)),
+)
+const canPauseSelected = computed(() =>
+  selectedTasks.value.some((task) => task.desiredState !== 'paused'),
+)
+const canResumeSelected = computed(() =>
+  selectedTasks.value.some((task) => task.desiredState === 'paused'),
+)
 
 onMounted(async () => {
   await Promise.all([loadTasks(), loadSettings(), loadStatus()])
@@ -103,7 +114,7 @@ async function loadStatus() {
   }
 }
 
-async function selectTask(task: BTTask) {
+async function openTask(task: BTTask) {
   if (Date.now() < ignoreSelectUntil) return
   const epoch = (selectionEpoch += 1)
   await run(async () => {
@@ -139,14 +150,77 @@ async function control(task: BTTask, action: 'pause' | 'resume') {
   }, action === 'pause' ? '任务已暂停。' : '任务已恢复。')
 }
 
-async function removeTask(task: BTTask) {
-  if (!confirm(`确定从任务列表删除“${task.name || task.infoHash}”？`)) return
-  const deleteData = confirm('是否同时删除已下载的数据？取消将保留文件。')
+async function controlSelected(action: 'pause' | 'resume') {
+  const targets = selectedTasks.value.filter((task) =>
+    action === 'pause' ? task.desiredState !== 'paused' : task.desiredState === 'paused',
+  )
+  if (!targets.length) return
+  await run(async () => {
+    for (const task of targets) {
+      await api(`/api/bt/tasks/${task.id}/${action}`, { method: 'POST' })
+    }
+    await loadTasks()
+    if (selectedTask.value) await refreshSelected(false)
+  }, action === 'pause' ? `已暂停 ${targets.length} 个任务。` : `已恢复 ${targets.length} 个任务。`)
+}
+
+async function removeTask(task: BTTask, deleteData: boolean) {
+  const label = deleteData ? '移除数据及任务' : '删除任务'
+  if (!confirm(`确定对“${task.name || task.infoHash}”执行「${label}」？`)) return
   await run(async () => {
     await api(`/api/bt/tasks/${task.id}?deleteData=${deleteData}`, { method: 'DELETE' })
+    selectedIds.value = selectedIds.value.filter((id) => id !== task.id)
     if (selectedTask.value?.id === task.id) closeDetail()
     await loadTasks()
   }, deleteData ? '任务及下载数据已删除。' : '任务已删除，下载数据已保留。')
+}
+
+async function removeSelected(deleteData: boolean) {
+  const targets = [...selectedTasks.value]
+  if (!targets.length) return
+  const label = deleteData ? '移除数据及任务' : '删除任务'
+  if (!confirm(`确定对选中的 ${targets.length} 个任务执行「${label}」？`)) return
+  await run(async () => {
+    for (const task of targets) {
+      await api(`/api/bt/tasks/${task.id}?deleteData=${deleteData}`, { method: 'DELETE' })
+      if (selectedTask.value?.id === task.id) closeDetail()
+    }
+    selectedIds.value = []
+    await loadTasks()
+  }, `已处理 ${targets.length} 个任务。`)
+}
+
+async function copyMagnet(task: BTTask) {
+  await run(async () => {
+    const data = await api<{ magnetLink: string }>(`/api/bt/tasks/${task.id}/magnet`)
+    if (!data.magnetLink) throw new Error('磁力链接不可用')
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(data.magnetLink)
+    } else {
+      window.prompt('复制磁力链接', data.magnetLink)
+    }
+  }, '磁力链接已复制。')
+}
+
+async function downloadTorrent(task: BTTask) {
+  await run(async () => {
+    const response = await fetch(`/api/bt/tasks/${task.id}/torrent`, { credentials: 'same-origin' })
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      throw new Error(data.error || `下载失败（${response.status}）`)
+    }
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    const disposition = response.headers.get('Content-Disposition') || ''
+    const matched = /filename="([^"]+)"/.exec(disposition)
+    anchor.href = url
+    anchor.download = matched?.[1] || `${task.name || task.infoHash}.magnet`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }, '种子/磁力文件已开始下载。')
 }
 
 async function saveFiles(files: Array<{ index: number; priority: number }>) {
@@ -223,15 +297,52 @@ function taskAdded(task: BTTask) {
         </select>
         <button class="secondary-button small-button" @click="loadTasks()">刷新</button>
       </div>
+      <div v-if="selectedIds.length" class="bt-bulk-actions">
+        <span>已选 {{ selectedIds.length }} 项</span>
+        <button
+          type="button"
+          class="small-button secondary-button"
+          :disabled="busy || !canPauseSelected"
+          @click="controlSelected('pause')"
+        >
+          暂停
+        </button>
+        <button
+          type="button"
+          class="small-button"
+          :disabled="busy || !canResumeSelected"
+          @click="controlSelected('resume')"
+        >
+          恢复
+        </button>
+        <button
+          type="button"
+          class="small-button danger-button"
+          :disabled="busy"
+          @click="removeSelected(false)"
+        >
+          删除任务
+        </button>
+        <button
+          type="button"
+          class="small-button danger-button"
+          :disabled="busy"
+          @click="removeSelected(true)"
+        >
+          移除数据及任务
+        </button>
+      </div>
       <p v-if="loading" class="empty-state">正在加载任务…</p>
       <TaskList
         v-else
+        v-model:selected-ids="selectedIds"
         :tasks="tasks"
         :busy="busy"
-        @select="selectTask"
+        @open="openTask"
         @pause="control($event, 'pause')"
-        @resume="control($event, 'resume')"
         @remove="removeTask"
+        @copy-magnet="copyMagnet"
+        @download-torrent="downloadTorrent"
       />
     </template>
     <AddTorrentForm

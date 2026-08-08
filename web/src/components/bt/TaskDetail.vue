@@ -4,6 +4,7 @@ import FileSelectionTree from './FileSelectionTree.vue'
 import type { BTFile, BTPeer, BTTask } from './types'
 import {
   formatBytes,
+  formatPercent,
   formatRate,
 } from './types'
 
@@ -24,18 +25,24 @@ const emit = defineEmits<{
 
 const activeTab = ref<DetailTab>('info')
 const priorities = ref<Record<number, number>>({})
+const prioritiesDirty = ref(false)
 const menu = ref<{
   x: number
   y: number
   items: Array<{ type: PeerBlockType; value: string; label: string }>
 } | null>(null)
 
+function syncPrioritiesFromFiles(files: BTFile[]) {
+  priorities.value = Object.fromEntries(
+    files.map((file) => [file.index, file.selected ? file.priority : 0]),
+  )
+}
+
 watch(
   () => props.files,
   (files) => {
-    priorities.value = Object.fromEntries(
-      files.map((file) => [file.index, file.selected ? file.priority : 0]),
-    )
+    if (prioritiesDirty.value) return
+    syncPrioritiesFromFiles(files)
   },
   { immediate: true },
 )
@@ -45,8 +52,15 @@ watch(
   () => {
     activeTab.value = 'info'
     menu.value = null
+    prioritiesDirty.value = false
+    syncPrioritiesFromFiles(props.files)
   },
 )
+
+function setPriorities(next: Record<number, number>) {
+  prioritiesDirty.value = true
+  priorities.value = next
+}
 
 const selectedBytes = computed(() =>
   props.files.reduce(
@@ -77,26 +91,30 @@ function isVideoFile(path: string) {
 }
 
 function selectMatching(match: (file: BTFile) => boolean) {
-  priorities.value = Object.fromEntries(
-    props.files.map((file) => {
-      if (!match(file)) return [file.index, 0]
-      const current = Number(priorities.value[file.index] || 0)
-      return [file.index, current > 0 ? current : 1]
-    }),
+  setPriorities(
+    Object.fromEntries(
+      props.files.map((file) => {
+        if (!match(file)) return [file.index, 0]
+        const current = Number(priorities.value[file.index] || 0)
+        return [file.index, current > 0 ? current : 1]
+      }),
+    ),
   )
 }
 
 function selectAll() {
-  priorities.value = Object.fromEntries(
-    props.files.map((file) => {
-      const current = Number(priorities.value[file.index] || 0)
-      return [file.index, current > 0 ? current : 1]
-    }),
+  setPriorities(
+    Object.fromEntries(
+      props.files.map((file) => {
+        const current = Number(priorities.value[file.index] || 0)
+        return [file.index, current > 0 ? current : 1]
+      }),
+    ),
   )
 }
 
 function selectNone() {
-  priorities.value = Object.fromEntries(props.files.map((file) => [file.index, 0]))
+  setPriorities(Object.fromEntries(props.files.map((file) => [file.index, 0])))
 }
 
 function selectVideosOnly() {
@@ -281,6 +299,10 @@ onBeforeUnmount(() => {
           </div>
           <div><dt>已上传</dt><dd>{{ formatBytes(task.uploadedBytes) }}</dd></div>
           <div>
+            <dt>可用率</dt>
+            <dd>{{ formatPercent(task.availablePercent) }}</dd>
+          </div>
+          <div>
             <dt>分享率</dt>
             <dd>
               {{ task.ratio.toFixed(2) }}
@@ -312,6 +334,7 @@ onBeforeUnmount(() => {
               <tr>
                 <th>地址</th>
                 <th>客户端</th>
+                <th>完成度</th>
                 <th class="peer-col-secondary">版本</th>
                 <th class="peer-col-secondary">网络</th>
                 <th class="peer-col-secondary">来源</th>
@@ -334,6 +357,7 @@ onBeforeUnmount(() => {
               >
                 <td class="content-cell">{{ peer.address || '—' }}</td>
                 <td>{{ peer.client || '—' }}</td>
+                <td>{{ formatPercent((peer.progress ?? 0) * 100) }}</td>
                 <td class="peer-col-secondary">{{ peer.clientVersion || '—' }}</td>
                 <td class="peer-col-secondary">{{ peer.network || '—' }}</td>
                 <td class="peer-col-secondary">{{ sourceLabel(peer.source) }}</td>
@@ -408,7 +432,7 @@ onBeforeUnmount(() => {
           :files="files"
           :priorities="priorities"
           :busy="busy"
-          @update:priorities="priorities = $event"
+          @update:priorities="setPriorities"
         />
       </div>
     </section>

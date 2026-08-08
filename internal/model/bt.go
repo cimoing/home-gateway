@@ -31,18 +31,23 @@ type BTTask struct {
 	DesiredState   string     `db:"desired_state" json:"desiredState"`
 	Status         string     `db:"status" json:"status"`
 	ErrorMessage   string     `db:"error_message" json:"error,omitempty"`
-	TotalBytes     int64      `db:"total_bytes" json:"totalBytes"`
-	CompletedBytes int64      `db:"-" json:"completedBytes"`
-	DownloadRate   int64      `db:"-" json:"downloadRate"`
-	UploadRate     int64      `db:"-" json:"uploadRate"`
-	UploadedBytes  int64      `db:"-" json:"uploadedBytes"`
-	Peers          int        `db:"-" json:"peers"`
-	Ratio          float64    `db:"-" json:"ratio"`
-	SeedingPaused  bool       `db:"-" json:"seedingPaused"`
-	ETASeconds     *int64     `db:"-" json:"etaSeconds,omitempty"`
-	CompletedAt    *time.Time `db:"completed_at" json:"completedAt,omitempty"`
-	CreatedAt      time.Time  `db:"created_at" json:"createdAt"`
-	UpdatedAt      time.Time  `db:"updated_at" json:"updatedAt"`
+	TotalBytes       int64      `db:"total_bytes" json:"totalBytes"`
+	CompletedBytes   int64      `db:"-" json:"completedBytes"`
+	DesiredAvailable int64      `db:"-" json:"desiredAvailable"`
+	SizeWhenDone     int64      `db:"-" json:"sizeWhenDone"`
+	PercentDone      float64    `db:"-" json:"percentDone"`
+	AvailablePercent float64    `db:"-" json:"availablePercent"`
+	DownloadRate     int64      `db:"-" json:"downloadRate"`
+	UploadRate       int64      `db:"-" json:"uploadRate"`
+	UploadedBytes    int64      `db:"-" json:"uploadedBytes"`
+	Peers            int        `db:"-" json:"peers"`
+	Ratio            float64    `db:"-" json:"ratio"`
+	SeedingPaused    bool       `db:"-" json:"seedingPaused"`
+	MagnetLink       string     `db:"-" json:"magnetLink,omitempty"`
+	ETASeconds       *int64     `db:"-" json:"etaSeconds,omitempty"`
+	CompletedAt      *time.Time `db:"completed_at" json:"completedAt,omitempty"`
+	CreatedAt        time.Time  `db:"created_at" json:"createdAt"`
+	UpdatedAt        time.Time  `db:"updated_at" json:"updatedAt"`
 }
 
 // BTTaskFile stores the user's download selection for one torrent file.

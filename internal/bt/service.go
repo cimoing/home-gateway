@@ -372,6 +372,19 @@ func (s *Service) Status() Status {
 // Restore is a no-op: the remote engine is the source of truth.
 func (s *Service) Restore(context.Context) error { return nil }
 
+// MagnetLink returns the remote magnet URI for a torrent.
+func (s *Service) MagnetLink(_ context.Context, id int64) (string, error) {
+	engine := s.getEngine()
+	if engine == nil {
+		return "", ErrUnavailable
+	}
+	link, err := engine.MagnetLink(id)
+	if err != nil {
+		return "", mapTaskNotFound(err)
+	}
+	return link, nil
+}
+
 // AddMagnet adds a magnet on the remote engine and returns its live snapshot.
 func (s *Service) AddMagnet(_ context.Context, uri string, options AddOptions) (model.BTTask, error) {
 	engine := s.getEngine()

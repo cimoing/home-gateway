@@ -146,6 +146,16 @@ func (e *fakeEngine) snapshotLocked(task *fakeEngineTask) RemoteTorrent {
 	}
 }
 
+func (e *fakeEngine) MagnetLink(id int64) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, task := range e.tasks {
+		if task.id == id {
+			return "magnet:?xt=urn:btih:" + task.hash, nil
+		}
+	}
+	return "", ErrNotFound
+}
 func (e *fakeEngine) Stats() EngineStats { return EngineStats{} }
 func (e *fakeEngine) SessionSettings() (SessionSettings, error) {
 	e.mu.Lock()

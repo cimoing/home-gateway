@@ -22,6 +22,7 @@ type Engine interface {
 	RemoveByID(id int64, deleteData bool) error
 	ListRemote() ([]RemoteTorrent, error)
 	GetRemote(id int64) (RemoteTorrent, error)
+	MagnetLink(id int64) (string, error)
 	Stats() EngineStats
 	SessionSettings() (SessionSettings, error)
 	ApplySessionLimits(downloadBps, uploadBps int64, seedRatioLimit float64) error
@@ -51,8 +52,13 @@ type RemoteTorrent struct {
 	CompletedBytes   int64
 	DownloadedBytes  int64
 	UploadedBytes    int64
+	DesiredAvailable int64
+	SizeWhenDone     int64
+	PercentDone      float64
+	AvailablePercent float64
 	Peers            int
 	MetadataComplete bool
+	MagnetLink       string
 	AddedAt          time.Time
 	Files            []RemoteFile
 }
@@ -113,16 +119,17 @@ type TaskStats struct {
 
 // PeerInfo describes one connected peer for a task.
 type PeerInfo struct {
-	Address       string `json:"address"`
-	PeerID        string `json:"peerId"`
-	Client        string `json:"client"`
-	ClientVersion string `json:"clientVersion"`
-	Network       string `json:"network"`
-	Source        string `json:"source"`
-	Downloaded    int64  `json:"downloadedBytes"`
-	Uploaded      int64  `json:"uploadedBytes"`
-	DownloadRate  int64  `json:"downloadRate"`
-	UploadRate    int64  `json:"uploadRate"`
+	Address       string  `json:"address"`
+	PeerID        string  `json:"peerId"`
+	Client        string  `json:"client"`
+	ClientVersion string  `json:"clientVersion"`
+	Network       string  `json:"network"`
+	Source        string  `json:"source"`
+	Progress      float64 `json:"progress"`
+	Downloaded    int64   `json:"downloadedBytes"`
+	Uploaded      int64   `json:"uploadedBytes"`
+	DownloadRate  int64   `json:"downloadRate"`
+	UploadRate    int64   `json:"uploadRate"`
 }
 
 // EngineStats contains process-wide BitTorrent gauges.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"path"
 	"strings"
 	"sync"
@@ -300,8 +301,10 @@ func (e *TransmissionEngine) RemoveByID(id int64, deleteData bool) error {
 
 var remoteTorrentFields = []string{
 	"id", "hashString", "name", "downloadDir", "status", "errorString",
-	"totalSize", "haveValid", "downloadedEver", "uploadedEver", "peersConnected",
-	"metadataPercentComplete", "addedDate", "files", "fileStats",
+	"totalSize", "haveValid", "downloadedEver", "uploadedEver",
+	"desiredAvailable", "sizeWhenDone", "leftUntilDone", "percentDone",
+	"peersConnected", "metadataPercentComplete", "addedDate", "magnetLink",
+	"files", "fileStats",
 }
 
 // ListRemote returns all torrents from transmission-daemon.
@@ -319,6 +322,34 @@ func (e *TransmissionEngine) ListRemote() ([]RemoteTorrent, error) {
 		out = append(out, mapRemoteTorrent(torrent, e.rootPath))
 	}
 	return out, nil
+}
+
+// MagnetLink returns the Transmission magnet URI for a torrent.
+func (e *TransmissionEngine) MagnetLink(id int64) (string, error) {
+	var result struct {
+		Torrents []transmissionTorrent `json:"torrents"`
+	}
+	if err := e.rpc.call("torrent-get", map[string]any{
+		"ids":    []int64{id},
+		"fields": []string{"id", "magnetLink", "hashString", "name"},
+	}, &result); err != nil {
+		return "", err
+	}
+	if len(result.Torrents) == 0 {
+		return "", ErrNotFound
+	}
+	link := strings.TrimSpace(result.Torrents[0].MagnetLink)
+	if link == "" {
+		hash := strings.ToLower(strings.TrimSpace(result.Torrents[0].HashString))
+		if hash == "" {
+			return "", fmt.Errorf("%w: magnet link unavailable", ErrUnavailable)
+		}
+		link = "magnet:?xt=urn:btih:" + hash
+		if name := strings.TrimSpace(result.Torrents[0].Name); name != "" {
+			link += "&dn=" + url.QueryEscape(path.Base(strings.ReplaceAll(name, "\\", "/")))
+		}
+	}
+	return link, nil
 }
 
 // GetRemote returns one torrent by Transmission id.
@@ -371,6 +402,10 @@ func mapRemoteTorrent(torrent *transmissionTorrent, root string) RemoteTorrent {
 	if torrent.AddedDate > 0 {
 		addedAt = time.Unix(int64(torrent.AddedDate), 0).UTC()
 	}
+	sizeWhenDone := torrent.SizeWhenDone
+	if sizeWhenDone <= 0 {
+		sizeWhenDone = torrent.TotalSize
+	}
 	return RemoteTorrent{
 		ID:               torrent.ID,
 		InfoHash:         strings.ToLower(strings.TrimSpace(torrent.HashString)),
@@ -383,11 +418,35 @@ func mapRemoteTorrent(torrent *transmissionTorrent, root string) RemoteTorrent {
 		CompletedBytes:   torrent.HaveValid,
 		DownloadedBytes:  torrent.DownloadedEver,
 		UploadedBytes:    torrent.UploadedEver,
+		DesiredAvailable: torrent.DesiredAvailable,
+		SizeWhenDone:     sizeWhenDone,
+		PercentDone:      torrent.PercentDone,
+		AvailablePercent: availablePercent(torrent),
 		Peers:            torrent.PeersConnected,
 		MetadataComplete: torrent.MetadataPercentComplete >= 1 || len(torrent.Files) > 0,
+		MagnetLink:       strings.TrimSpace(torrent.MagnetLink),
 		AddedAt:          addedAt,
 		Files:            files,
 	}
+}
+
+func availablePercent(torrent *transmissionTorrent) float64 {
+	sizeWhenDone := torrent.SizeWhenDone
+	if sizeWhenDone <= 0 {
+		sizeWhenDone = torrent.TotalSize
+	}
+	if sizeWhenDone <= 0 {
+		return 0
+	}
+	have := torrent.HaveValid
+	if have > sizeWhenDone {
+		have = sizeWhenDone
+	}
+	available := have + torrent.DesiredAvailable
+	if available > sizeWhenDone {
+		available = sizeWhenDone
+	}
+	return float64(available) * 100 / float64(sizeWhenDone)
 }
 
 func mapTransmissionStatus(torrent *transmissionTorrent) (status, desired string) {
@@ -607,6 +666,13 @@ func (t *transmissionTask) Peers() []PeerInfo {
 		if client == "" {
 			client, version = splitClientVersion(peer.ClientName)
 		}
+		progress := peer.Progress
+		if progress < 0 {
+			progress = 0
+		}
+		if progress > 1 {
+			progress = 1
+		}
 		peers = append(peers, PeerInfo{
 			Address:       address,
 			PeerID:        peerID,
@@ -614,6 +680,7 @@ func (t *transmissionTask) Peers() []PeerInfo {
 			ClientVersion: version,
 			Network:       network,
 			Source:        source,
+			Progress:      progress,
 			DownloadRate:  int64(peer.RateToClient),
 			UploadRate:    int64(peer.RateToPeer),
 		})

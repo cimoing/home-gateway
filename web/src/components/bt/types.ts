@@ -10,12 +10,17 @@ export interface BTTask {
   error?: string
   totalBytes: number
   completedBytes: number
+  desiredAvailable?: number
+  sizeWhenDone?: number
+  percentDone?: number
+  availablePercent?: number
   downloadRate: number
   uploadRate: number
   uploadedBytes: number
   peers: number
   ratio: number
   seedingPaused?: boolean
+  magnetLink?: string
   etaSeconds?: number
   createdAt: string
 }
@@ -38,6 +43,7 @@ export interface BTPeer {
   clientVersion?: string
   network: string
   source: string
+  progress?: number
   downloadedBytes: number
   uploadedBytes: number
   downloadRate: number
@@ -89,4 +95,9 @@ export function formatDuration(seconds?: number) {
   if (seconds < 60) return `${seconds} 秒`
   if (seconds < 3600) return `${Math.ceil(seconds / 60)} 分钟`
   return `${Math.floor(seconds / 3600)} 小时 ${Math.ceil((seconds % 3600) / 60)} 分钟`
+}
+
+export function formatPercent(value?: number, fractionDigits = 1) {
+  if (!Number.isFinite(value)) return '—'
+  return `${Number(value).toFixed(fractionDigits)}%`
 }

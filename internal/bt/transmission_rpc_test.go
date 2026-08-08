@@ -109,6 +109,15 @@ func TestBpsToTransmissionLimit(t *testing.T) {
 	}
 }
 
+func TestAvailablePercent(t *testing.T) {
+	got := availablePercent(&transmissionTorrent{
+		HaveValid: 50, DesiredAvailable: 25, SizeWhenDone: 100,
+	})
+	if got != 75 {
+		t.Fatalf("got %v", got)
+	}
+}
+
 func TestSessionLimitArgs(t *testing.T) {
 	args := sessionLimitArgs(10*1024, 0, 2)
 	if args["speed-limit-down"] != int64(10) || args["speed-limit-down-enabled"] != true {

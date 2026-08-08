@@ -19,6 +19,11 @@ const emit = defineEmits<{
   'update:priorities': [value: Record<number, number>]
 }>()
 
+type SortKey = 'path' | 'size' | 'progress'
+type SortDir = 'asc' | 'desc'
+
+const sortKey = ref<SortKey>('path')
+const sortDir = ref<SortDir>('asc')
 const tree = computed(() => buildFileTree(props.files))
 const expanded = ref<Set<string>>(new Set())
 const structureKey = computed(() => props.files.map((file) => file.path).join('\0'))
@@ -86,9 +91,27 @@ function bindIndeterminate(el: Element | null, indeterminate: boolean) {
   if (el instanceof HTMLInputElement) el.indeterminate = indeterminate
 }
 
+function progressRatio(file: BTFile) {
+  if (!file.length) return 1
+  return Math.min(1, file.completedBytes / file.length)
+}
+
 function progressLabel(file: BTFile) {
-  if (!file.length) return '100%'
-  return `${((file.completedBytes / file.length) * 100).toFixed(1)}%`
+  return `${(progressRatio(file) * 100).toFixed(1)}%`
+}
+
+function toggleSort(key: SortKey) {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+    return
+  }
+  sortKey.value = key
+  sortDir.value = key === 'path' ? 'asc' : 'desc'
+}
+
+function sortMark(key: SortKey) {
+  if (sortKey.value !== key) return ''
+  return sortDir.value === 'asc' ? ' ↑' : ' ↓'
 }
 
 type FlatRow =
@@ -96,6 +119,26 @@ type FlatRow =
   | { kind: 'file'; node: FileTreeNode; depth: number; file: BTFile }
 
 const rows = computed(() => {
+  if (sortKey.value !== 'path') {
+    const direction = sortDir.value === 'asc' ? 1 : -1
+    const files = [...props.files].sort((a, b) => {
+      if (sortKey.value === 'size') {
+        if (a.length !== b.length) return (a.length - b.length) * direction
+      } else {
+        const left = progressRatio(a)
+        const right = progressRatio(b)
+        if (left !== right) return (left - right) * direction
+      }
+      return a.path.localeCompare(b.path)
+    })
+    return files.map((file) => ({
+      kind: 'file' as const,
+      node: { name: file.path, path: file.path, isDir: false, children: [], file },
+      depth: 0,
+      file,
+    }))
+  }
+
   const result: FlatRow[] = []
   function walk(node: FileTreeNode, depth: number) {
     for (const child of node.children) {
@@ -118,9 +161,21 @@ const rows = computed(() => {
       <thead>
         <tr>
           <th class="file-tree-check">选择</th>
-          <th>文件</th>
-          <th>大小</th>
-          <th>进度</th>
+          <th>
+            <button type="button" class="sort-header" @click="toggleSort('path')">
+              文件{{ sortMark('path') }}
+            </button>
+          </th>
+          <th>
+            <button type="button" class="sort-header" @click="toggleSort('size')">
+              大小{{ sortMark('size') }}
+            </button>
+          </th>
+          <th>
+            <button type="button" class="sort-header" @click="toggleSort('progress')">
+              进度{{ sortMark('progress') }}
+            </button>
+          </th>
           <th>优先级</th>
         </tr>
       </thead>
@@ -158,7 +213,7 @@ const rows = computed(() => {
               </button>
               <span v-else class="file-tree-spacer" aria-hidden="true" />
               <span :class="row.kind === 'dir' ? 'file-tree-dir' : 'file-tree-file'">
-                {{ row.node.name }}
+                {{ row.kind === 'file' && sortKey !== 'path' ? row.file.path : row.node.name }}
               </span>
             </div>
           </td>

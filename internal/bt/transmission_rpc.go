@@ -125,10 +125,15 @@ type transmissionTorrent struct {
 	HaveValid               int64                  `json:"haveValid"`
 	DownloadedEver          int64                  `json:"downloadedEver"`
 	UploadedEver            int64                  `json:"uploadedEver"`
+	DesiredAvailable        int64                  `json:"desiredAvailable"`
+	SizeWhenDone            int64                  `json:"sizeWhenDone"`
+	LeftUntilDone           int64                  `json:"leftUntilDone"`
+	PercentDone             float64                `json:"percentDone"`
 	PeersConnected          int                    `json:"peersConnected"`
 	Status                  int                    `json:"status"`
 	AddedDate               float64                `json:"addedDate"`
 	MetadataPercentComplete float64                `json:"metadataPercentComplete"`
+	MagnetLink              string                 `json:"magnetLink"`
 	Files                   []transmissionFile     `json:"files"`
 	FileStats               []transmissionFileStat `json:"fileStats"`
 	Peers                   []transmissionPeer     `json:"peers"`
