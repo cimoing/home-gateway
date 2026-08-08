@@ -160,6 +160,10 @@ function peerPort(address: string) {
 
 function openPeerMenu(event: MouseEvent, peer: BTPeer) {
   event.preventDefault()
+  showPeerMenu(event.clientX, event.clientY, peer)
+}
+
+function showPeerMenu(x: number, y: number, peer: BTPeer) {
   const items: Array<{ type: PeerBlockType; value: string; label: string }> = []
   const host = peerHost(peer.address || '')
   const port = peerPort(peer.address || '')
@@ -183,7 +187,35 @@ function openPeerMenu(event: MouseEvent, peer: BTPeer) {
     menu.value = null
     return
   }
-  menu.value = { x: event.clientX, y: event.clientY, items }
+  const width = 240
+  const height = items.length * 42 + 16
+  menu.value = {
+    x: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
+    y: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
+    items,
+  }
+}
+
+let longPressTimer: number | null = null
+
+function clearLongPress() {
+  if (longPressTimer !== null) {
+    window.clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+function onPeerPointerDown(event: PointerEvent, peer: BTPeer) {
+  if (event.pointerType !== 'touch') return
+  clearLongPress()
+  longPressTimer = window.setTimeout(() => {
+    longPressTimer = null
+    showPeerMenu(event.clientX, event.clientY, peer)
+  }, 480)
+}
+
+function onPeerPointerCancel() {
+  clearLongPress()
 }
 
 function closeMenu() {
@@ -204,6 +236,7 @@ onMounted(() => {
   window.addEventListener('keydown', onWindowKeydown)
 })
 onBeforeUnmount(() => {
+  clearLongPress()
   window.removeEventListener('click', closeMenu)
   window.removeEventListener('keydown', onWindowKeydown)
 })
@@ -262,7 +295,7 @@ onBeforeUnmount(() => {
         <div class="file-heading">
           <div>
             <h3>已连接 Peers</h3>
-            <p>右键节点可屏蔽 IP / 客户端 / 端口 / Peer ID</p>
+            <p>右键或长按节点可屏蔽；手机也可点「屏蔽」</p>
           </div>
         </div>
         <p v-if="!peers.length" class="empty-state">暂无已连接的 peer。</p>
@@ -272,12 +305,13 @@ onBeforeUnmount(() => {
               <tr>
                 <th>地址</th>
                 <th>客户端</th>
-                <th>版本</th>
-                <th>网络</th>
-                <th>来源</th>
+                <th class="peer-col-secondary">版本</th>
+                <th class="peer-col-secondary">网络</th>
+                <th class="peer-col-secondary">来源</th>
                 <th>下载</th>
                 <th>上传</th>
-                <th>Peer ID</th>
+                <th class="peer-col-secondary">Peer ID</th>
+                <th class="peer-actions">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -286,15 +320,29 @@ onBeforeUnmount(() => {
                 :key="`${peer.address}-${peer.peerId}`"
                 class="peer-row"
                 @contextmenu="openPeerMenu($event, peer)"
+                @pointerdown="onPeerPointerDown($event, peer)"
+                @pointerup="onPeerPointerCancel"
+                @pointercancel="onPeerPointerCancel"
+                @pointerleave="onPeerPointerCancel"
               >
                 <td class="content-cell">{{ peer.address || '—' }}</td>
                 <td>{{ peer.client || '—' }}</td>
-                <td>{{ peer.clientVersion || '—' }}</td>
-                <td>{{ peer.network || '—' }}</td>
-                <td>{{ sourceLabel(peer.source) }}</td>
+                <td class="peer-col-secondary">{{ peer.clientVersion || '—' }}</td>
+                <td class="peer-col-secondary">{{ peer.network || '—' }}</td>
+                <td class="peer-col-secondary">{{ sourceLabel(peer.source) }}</td>
                 <td>{{ formatRate(peer.downloadRate) }}</td>
                 <td>{{ formatRate(peer.uploadRate) }}</td>
-                <td class="content-cell peer-id">{{ peer.peerId || '—' }}</td>
+                <td class="content-cell peer-id peer-col-secondary">{{ peer.peerId || '—' }}</td>
+                <td class="peer-actions">
+                  <button
+                    type="button"
+                    class="small-button secondary-button"
+                    :disabled="busy"
+                    @click.stop="showPeerMenu($event.clientX, $event.clientY, peer)"
+                  >
+                    屏蔽
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>

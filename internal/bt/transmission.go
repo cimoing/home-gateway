@@ -39,6 +39,7 @@ func NewTransmissionEngine(
 	listenPort int,
 	downloadLimitBps int64,
 	uploadLimitBps int64,
+	seedRatioLimit float64,
 	blockConfig BlockConfig,
 ) (*TransmissionEngine, error) {
 	blocker, err := NewBlocker(blockConfig)
@@ -52,7 +53,7 @@ func NewTransmissionEngine(
 		blocker:    blocker,
 		tasks:      make(map[string]*transmissionTask),
 	}
-	if err := engine.bootstrap(downloadLimitBps, uploadLimitBps); err != nil {
+	if err := engine.bootstrap(downloadLimitBps, uploadLimitBps, seedRatioLimit); err != nil {
 		return nil, err
 	}
 	if err := engine.reloadTasks(); err != nil {
@@ -68,7 +69,10 @@ func NewTransmissionEngine(
 	return engine, nil
 }
 
-func (e *TransmissionEngine) bootstrap(downloadLimitBps, uploadLimitBps int64) error {
+func (e *TransmissionEngine) bootstrap(
+	downloadLimitBps, uploadLimitBps int64,
+	seedRatioLimit float64,
+) error {
 	var version struct {
 		Version string `json:"version"`
 	}
@@ -80,8 +84,6 @@ func (e *TransmissionEngine) bootstrap(downloadLimitBps, uploadLimitBps int64) e
 			return fmt.Errorf("connect transmission: %w", err)
 		}
 	}
-	downLimit, downLimited := bpsToTransmissionLimit(downloadLimitBps)
-	upLimit, upLimited := bpsToTransmissionLimit(uploadLimitBps)
 	args := map[string]any{
 		"download-dir":              e.rootPath,
 		"peer-port":                 e.listenPort,
@@ -90,15 +92,32 @@ func (e *TransmissionEngine) bootstrap(downloadLimitBps, uploadLimitBps int64) e
 		"dht-enabled":               true,
 		"pex-enabled":               true,
 		"start-added-torrents":      false,
-		"speed-limit-down":          downLimit,
-		"speed-limit-down-enabled":  downLimited,
-		"speed-limit-up":            upLimit,
-		"speed-limit-up-enabled":    upLimited,
+	}
+	for key, value := range sessionLimitArgs(downloadLimitBps, uploadLimitBps, seedRatioLimit) {
+		args[key] = value
 	}
 	if err := e.rpc.call("session-set", args, nil); err != nil {
 		return fmt.Errorf("configure transmission session: %w", err)
 	}
 	return nil
+}
+
+func sessionLimitArgs(downloadBps, uploadBps int64, seedRatioLimit float64) map[string]any {
+	downLimit, downLimited := bpsToTransmissionLimit(downloadBps)
+	upLimit, upLimited := bpsToTransmissionLimit(uploadBps)
+	limited := seedRatioLimit > 0
+	ratio := seedRatioLimit
+	if !limited {
+		ratio = 0
+	}
+	return map[string]any{
+		"speed-limit-down":         downLimit,
+		"speed-limit-down-enabled": downLimited,
+		"speed-limit-up":           upLimit,
+		"speed-limit-up-enabled":   upLimited,
+		"seedRatioLimit":           ratio,
+		"seedRatioLimited":         limited,
+	}
 }
 
 func (e *TransmissionEngine) reloadTasks() error {
@@ -418,15 +437,55 @@ func (e *TransmissionEngine) Stats() EngineStats {
 	}
 }
 
-func (e *TransmissionEngine) SetRateLimits(downloadBps, uploadBps int64) {
-	downLimit, downLimited := bpsToTransmissionLimit(downloadBps)
-	upLimit, upLimited := bpsToTransmissionLimit(uploadBps)
-	_ = e.rpc.call("session-set", map[string]any{
-		"speed-limit-down":         downLimit,
-		"speed-limit-down-enabled": downLimited,
-		"speed-limit-up":           upLimit,
-		"speed-limit-up-enabled":   upLimited,
-	}, nil)
+func (e *TransmissionEngine) SessionSettings() (SessionSettings, error) {
+	var result struct {
+		DownloadDir             string  `json:"download-dir"`
+		PeerPort                int     `json:"peer-port"`
+		SpeedLimitDown          int64   `json:"speed-limit-down"`
+		SpeedLimitDownEnabled   bool    `json:"speed-limit-down-enabled"`
+		SpeedLimitUp            int64   `json:"speed-limit-up"`
+		SpeedLimitUpEnabled     bool    `json:"speed-limit-up-enabled"`
+		SeedRatioLimit          float64 `json:"seedRatioLimit"`
+		SeedRatioLimited        bool    `json:"seedRatioLimited"`
+	}
+	if err := e.rpc.call("session-get", map[string]any{
+		"fields": []string{
+			"download-dir", "peer-port",
+			"speed-limit-down", "speed-limit-down-enabled",
+			"speed-limit-up", "speed-limit-up-enabled",
+			"seedRatioLimit", "seedRatioLimited",
+		},
+	}, &result); err != nil {
+		return SessionSettings{}, fmt.Errorf("read transmission session: %w", err)
+	}
+	settings := SessionSettings{
+		DownloadDir: cleanRemotePath(result.DownloadDir),
+		ListenPort:  result.PeerPort,
+	}
+	if result.SpeedLimitDownEnabled {
+		settings.DownloadLimitBps = result.SpeedLimitDown * 1024
+	}
+	if result.SpeedLimitUpEnabled {
+		settings.UploadLimitBps = result.SpeedLimitUp * 1024
+	}
+	if result.SeedRatioLimited {
+		settings.SeedRatioLimit = result.SeedRatioLimit
+	}
+	return settings, nil
+}
+
+func (e *TransmissionEngine) ApplySessionLimits(
+	downloadBps, uploadBps int64,
+	seedRatioLimit float64,
+) error {
+	if err := e.rpc.call(
+		"session-set",
+		sessionLimitArgs(downloadBps, uploadBps, seedRatioLimit),
+		nil,
+	); err != nil {
+		return fmt.Errorf("sync transmission session limits: %w", err)
+	}
+	return nil
 }
 
 func (e *TransmissionEngine) SetBlockConfig(config BlockConfig) error {

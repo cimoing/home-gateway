@@ -76,20 +76,21 @@ type rateSample struct {
 // Service proxies BT operations to the remote Transmission engine.
 // Task state is never persisted locally.
 type Service struct {
-	engine      Engine
-	config      appconfig.BTConfig
-	configPath  string
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	mu          sync.Mutex
-	samples     map[string]rateSample
-	peerSamples map[string]rateSample
-	global      rateSample
-	seedPaused  map[string]bool
+	engine       Engine
+	config       appconfig.BTConfig
+	configPath   string
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	mu           sync.Mutex
+	watchStarted bool
+	samples      map[string]rateSample
+	peerSamples  map[string]rateSample
+	global       rateSample
+	seedPaused   map[string]bool
 }
 
-// NewService creates a BT service. engine may be nil when disabled.
+// NewService creates a BT service. engine may be nil until AttachEngine.
 func NewService(
 	engine Engine,
 	config appconfig.BTConfig,
@@ -105,17 +106,50 @@ func NewService(
 		seedPaused:  make(map[string]bool),
 	}
 	if engine != nil {
+		service.watchStarted = true
 		service.wg.Add(1)
 		go service.watchSeedRatio()
 	}
 	return service
 }
 
-// Settings returns safe runtime configuration.
-func (s *Service) Settings() Settings {
+func (s *Service) getEngine() Engine {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Settings{
+	return s.engine
+}
+
+// AttachEngine installs a remote engine after the HTTP server is already up.
+func (s *Service) AttachEngine(engine Engine) {
+	if engine == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.ctx.Err() != nil {
+		s.mu.Unlock()
+		_ = engine.Close()
+		return
+	}
+	previous := s.engine
+	s.engine = engine
+	startWatch := !s.watchStarted
+	if startWatch {
+		s.watchStarted = true
+	}
+	s.mu.Unlock()
+	if previous != nil {
+		_ = previous.Close()
+	}
+	if startWatch {
+		s.wg.Add(1)
+		go s.watchSeedRatio()
+	}
+}
+
+// Settings returns runtime configuration, preferring live Transmission values.
+func (s *Service) Settings() Settings {
+	s.mu.Lock()
+	settings := Settings{
 		Enabled:          s.config.Enable,
 		Engine:           "transmission",
 		DownloadDir:      s.config.DownloadDir,
@@ -132,6 +166,30 @@ func (s *Service) Settings() Settings {
 			Networks: append([]string(nil), s.config.Block.Networks...),
 		},
 	}
+	engine := s.engine
+	s.mu.Unlock()
+	if engine == nil {
+		return settings
+	}
+	remote, err := engine.SessionSettings()
+	if err != nil {
+		log.Printf("BT session settings read failed: %v", err)
+		return settings
+	}
+	settings.DownloadDir = remote.DownloadDir
+	settings.DownloadRoot = remote.DownloadDir
+	settings.ListenPort = remote.ListenPort
+	settings.DownloadLimitBps = remote.DownloadLimitBps
+	settings.UploadLimitBps = remote.UploadLimitBps
+	settings.SeedRatioLimit = remote.SeedRatioLimit
+	settings.Running = true
+
+	s.mu.Lock()
+	s.config.DownloadLimitBps = appconfig.ByteRate(remote.DownloadLimitBps)
+	s.config.UploadLimitBps = appconfig.ByteRate(remote.UploadLimitBps)
+	s.config.SeedRatioLimit = remote.SeedRatioLimit
+	s.mu.Unlock()
+	return settings
 }
 
 // ApplyConfig updates mutable BT settings from a reloaded YAML file.
@@ -148,11 +206,14 @@ func (s *Service) ApplyConfig(config appconfig.BTConfig) {
 	s.config.ListenPort = config.ListenPort
 	downloadLimit := s.config.DownloadLimitBps.Int64()
 	uploadLimit := s.config.UploadLimitBps.Int64()
+	seedRatio := s.config.SeedRatioLimit
 	block := blockConfigFromApp(s.config.Block)
 	engine := s.engine
 	s.mu.Unlock()
 	if engine != nil {
-		engine.SetRateLimits(downloadLimit, uploadLimit)
+		if err := engine.ApplySessionLimits(downloadLimit, uploadLimit, seedRatio); err != nil {
+			log.Printf("BT Transmission session sync failed: %v", err)
+		}
 		if err := engine.SetBlockConfig(block); err != nil {
 			log.Printf("BT blocklist reload failed: %v", err)
 		}
@@ -238,8 +299,13 @@ func appendUniqueInt(values []int, value int) []int {
 	return append(values, value)
 }
 
-// UpdateSettings persists mutable limits and applies them to the engine.
+// UpdateSettings syncs mutable limits to Transmission only (no local YAML write).
 func (s *Service) UpdateSettings(request UpdateSettingsRequest) (Settings, error) {
+	engine := s.getEngine()
+	if engine == nil {
+		return Settings{}, ErrUnavailable
+	}
+
 	s.mu.Lock()
 	if request.DownloadLimitBps != nil {
 		if *request.DownloadLimitBps < 0 {
@@ -262,35 +328,24 @@ func (s *Service) UpdateSettings(request UpdateSettingsRequest) (Settings, error
 		}
 		s.config.SeedRatioLimit = *request.SeedRatioLimit
 	}
-	btConfig := s.config
 	downloadLimit := s.config.DownloadLimitBps.Int64()
 	uploadLimit := s.config.UploadLimitBps.Int64()
-	configPath := s.configPath
-	engine := s.engine
+	seedRatio := s.config.SeedRatioLimit
 	s.mu.Unlock()
 
-	if configPath != "" {
-		existing, err := appconfig.Load(configPath, false)
-		if err != nil {
-			return Settings{}, fmt.Errorf("load config for BT settings: %w", err)
-		}
-		existing.BT = btConfig
-		if err := appconfig.Save(configPath, existing); err != nil {
-			return Settings{}, fmt.Errorf("persist BT settings: %w", err)
-		}
-	}
-	if engine != nil {
-		engine.SetRateLimits(downloadLimit, uploadLimit)
+	if err := engine.ApplySessionLimits(downloadLimit, uploadLimit, seedRatio); err != nil {
+		return Settings{}, err
 	}
 	return s.Settings(), nil
 }
 
 // Status returns session transfer rates from the remote engine.
 func (s *Service) Status() Status {
-	if s.engine == nil {
+	engine := s.getEngine()
+	if engine == nil {
 		return Status{}
 	}
-	stats := s.engine.Stats()
+	stats := engine.Stats()
 	status := Status{
 		DHTNodes:        stats.DHTNodes,
 		DHTGoodNodes:    stats.DHTGoodNodes,
@@ -319,7 +374,8 @@ func (s *Service) Restore(context.Context) error { return nil }
 
 // AddMagnet adds a magnet on the remote engine and returns its live snapshot.
 func (s *Service) AddMagnet(_ context.Context, uri string, options AddOptions) (model.BTTask, error) {
-	if s.engine == nil {
+	engine := s.getEngine()
+	if engine == nil {
 		return model.BTTask{}, ErrUnavailable
 	}
 	uri = strings.TrimSpace(uri)
@@ -330,7 +386,7 @@ func (s *Service) AddMagnet(_ context.Context, uri string, options AddOptions) (
 	if err != nil {
 		return model.BTTask{}, err
 	}
-	runtime, err := s.engine.AddMagnet(uri, savePath)
+	runtime, err := engine.AddMagnet(uri, savePath)
 	if err != nil {
 		return model.BTTask{}, err
 	}
@@ -344,7 +400,8 @@ func (s *Service) AddMagnet(_ context.Context, uri string, options AddOptions) (
 
 // AddTorrent adds a .torrent on the remote engine and returns its live snapshot.
 func (s *Service) AddTorrent(_ context.Context, metainfo []byte, options AddOptions) (model.BTTask, error) {
-	if s.engine == nil {
+	engine := s.getEngine()
+	if engine == nil {
 		return model.BTTask{}, ErrUnavailable
 	}
 	if len(metainfo) == 0 {
@@ -354,7 +411,7 @@ func (s *Service) AddTorrent(_ context.Context, metainfo []byte, options AddOpti
 	if err != nil {
 		return model.BTTask{}, err
 	}
-	runtime, err := s.engine.AddTorrent(metainfo, savePath)
+	runtime, err := engine.AddTorrent(metainfo, savePath)
 	if err != nil {
 		return model.BTTask{}, err
 	}
@@ -381,7 +438,8 @@ func (s *Service) watchSeedRatio() {
 }
 
 func (s *Service) enforceSeedRatio() {
-	if s.engine == nil {
+	engine := s.getEngine()
+	if engine == nil {
 		return
 	}
 	s.mu.Lock()
@@ -391,7 +449,7 @@ func (s *Service) enforceSeedRatio() {
 		s.clearSeedPauses()
 		return
 	}
-	remotes, err := s.engine.ListRemote()
+	remotes, err := engine.ListRemote()
 	if err != nil {
 		return
 	}
@@ -399,7 +457,7 @@ func (s *Service) enforceSeedRatio() {
 		if remote.DesiredState == model.BTStatePaused {
 			continue
 		}
-		runtime, ok := s.engine.TaskByID(remote.ID)
+		runtime, ok := engine.TaskByID(remote.ID)
 		if !ok {
 			continue
 		}
@@ -427,6 +485,7 @@ func (s *Service) enforceSeedRatio() {
 }
 
 func (s *Service) clearSeedPauses() {
+	engine := s.getEngine()
 	s.mu.Lock()
 	hashes := make([]string, 0, len(s.seedPaused))
 	for hash := range s.seedPaused {
@@ -434,8 +493,11 @@ func (s *Service) clearSeedPauses() {
 	}
 	s.seedPaused = make(map[string]bool)
 	s.mu.Unlock()
+	if engine == nil {
+		return
+	}
 	for _, hash := range hashes {
-		runtime, ok := s.engine.Task(hash)
+		runtime, ok := engine.Task(hash)
 		if !ok {
 			continue
 		}
@@ -458,8 +520,12 @@ func shareRatio(uploaded, downloaded, totalBytes int64) float64 {
 func (s *Service) Close() error {
 	s.cancel()
 	s.wg.Wait()
-	if s.engine != nil {
-		return s.engine.Close()
+	s.mu.Lock()
+	engine := s.engine
+	s.engine = nil
+	s.mu.Unlock()
+	if engine != nil {
+		return engine.Close()
 	}
 	return nil
 }

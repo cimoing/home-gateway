@@ -39,10 +39,21 @@ function submit() {
   <section class="panel settings-panel">
     <div class="panel-heading">
       <h2>BT 引擎设置</h2>
-      <p>通过后端转发 Transmission RPC；下载目录与 peer 端口来自 YAML，速度限制可写回配置。</p>
+      <p>以下为 Transmission 远程会话配置；保存时直接写入远端（速度限制与分享率）。</p>
     </div>
     <dl v-if="settings" class="detail-grid">
-      <div><dt>状态</dt><dd>{{ settings.running ? '运行中' : '未运行' }}</dd></div>
+      <div>
+        <dt>状态</dt>
+        <dd>
+          {{
+            settings.running
+              ? '运行中'
+              : settings.enabled
+                ? '连接中…'
+                : '未运行'
+          }}
+        </dd>
+      </div>
       <div><dt>引擎</dt><dd>{{ settings.engine || 'transmission' }}</dd></div>
       <div><dt>启用</dt><dd>{{ settings.enabled ? '是' : '否' }}</dd></div>
       <div><dt>Peer 端口</dt><dd>{{ settings.listenPort }}（远程 daemon）</dd></div>

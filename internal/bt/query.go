@@ -14,10 +14,11 @@ func (s *Service) ListTasks(
 	status string,
 	search string,
 ) ([]model.BTTask, error) {
-	if s.engine == nil {
+	engine := s.getEngine()
+	if engine == nil {
 		return nil, ErrUnavailable
 	}
-	remotes, err := s.engine.ListRemote()
+	remotes, err := engine.ListRemote()
 	if err != nil {
 		return nil, err
 	}
@@ -40,10 +41,11 @@ func (s *Service) ListTasks(
 
 // GetTask returns one remote torrent by Transmission id.
 func (s *Service) GetTask(_ context.Context, id int64) (model.BTTask, error) {
-	if s.engine == nil {
+	engine := s.getEngine()
+	if engine == nil {
 		return model.BTTask{}, ErrUnavailable
 	}
-	remote, err := s.engine.GetRemote(id)
+	remote, err := engine.GetRemote(id)
 	if err != nil {
 		return model.BTTask{}, mapTaskNotFound(err)
 	}
@@ -52,10 +54,11 @@ func (s *Service) GetTask(_ context.Context, id int64) (model.BTTask, error) {
 
 // Files returns remote file selections for a torrent.
 func (s *Service) Files(_ context.Context, taskID int64) ([]model.BTTaskFile, error) {
-	if s.engine == nil {
+	engine := s.getEngine()
+	if engine == nil {
 		return nil, ErrUnavailable
 	}
-	remote, err := s.engine.GetRemote(taskID)
+	remote, err := engine.GetRemote(taskID)
 	if err != nil {
 		return nil, mapTaskNotFound(err)
 	}
@@ -130,15 +133,16 @@ func (s *Service) enrichRemote(remote RemoteTorrent) model.BTTask {
 
 // Peers returns connected peers for a remote torrent.
 func (s *Service) Peers(_ context.Context, taskID int64) ([]PeerInfo, error) {
-	if s.engine == nil {
+	engine := s.getEngine()
+	if engine == nil {
 		return nil, ErrUnavailable
 	}
-	runtime, ok := s.engine.TaskByID(taskID)
+	runtime, ok := engine.TaskByID(taskID)
 	if !ok {
-		if _, err := s.engine.GetRemote(taskID); err != nil {
+		if _, err := engine.GetRemote(taskID); err != nil {
 			return nil, mapTaskNotFound(err)
 		}
-		runtime, ok = s.engine.TaskByID(taskID)
+		runtime, ok = engine.TaskByID(taskID)
 		if !ok {
 			return nil, ErrUnavailable
 		}

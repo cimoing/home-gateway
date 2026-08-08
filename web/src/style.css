@@ -897,6 +897,12 @@ button.linkish {
   cursor: not-allowed;
 }
 
+.peer-actions {
+  display: none;
+  width: 1%;
+  white-space: nowrap;
+}
+
 .bt-status-bar {
   position: fixed;
   right: 18px;
@@ -942,7 +948,7 @@ button.linkish {
 
 @media (max-width: 600px) {
   main {
-    padding: 16px;
+    padding: 12px;
   }
 
   .dashboard-header,
@@ -951,35 +957,128 @@ button.linkish {
     flex-direction: column;
   }
 
+  .dashboard-header h1 {
+    font-size: clamp(24px, 8vw, 36px);
+  }
+
+  .module-tabs {
+    flex-wrap: wrap;
+  }
+
+  .module-tabs button {
+    flex: 1 1 calc(50% - 8px);
+    min-height: 44px;
+  }
+
   .record-form {
     grid-template-columns: 1fr;
   }
 
   .tabs button {
+    min-height: 44px;
     padding: 10px 6px;
     font-size: 13px;
   }
 
   .bt-toolbar,
-  .file-toolbar {
+  .file-toolbar,
+  .sync-toolbar {
     grid-template-columns: 1fr;
   }
 
   .bt-task-card,
-  .task-actions {
+  .task-actions,
+  .table-actions,
+  .file-heading,
+  .task-detail > header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .zone-item {
+    grid-template-columns: 1fr;
+  }
+
+  .file-heading-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .file-heading-actions button {
+    width: 100%;
+    min-height: 44px;
   }
 
   .detail-grid {
     grid-template-columns: 1fr;
   }
 
+  .detail-backdrop {
+    padding: 0;
+    place-items: stretch;
+  }
+
+  .task-detail {
+    width: 100%;
+    max-width: none;
+    max-height: 100dvh;
+    min-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .list-item {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  button.linkish {
+    min-height: 44px;
+    padding: 8px 4px;
+  }
+
+  .small-button {
+    min-height: 40px;
+    padding: 10px 14px;
+  }
+
+  .file-tree-name {
+    min-width: 0;
+  }
+
+  .file-tree-toggle,
+  .file-tree-spacer {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  .file-tree-table input[type='checkbox'] {
+    width: 20px;
+    height: 20px;
+  }
+
+  .peer-col-secondary {
+    display: none;
+  }
+
+  .peer-actions {
+    display: table-cell;
+  }
+
+  .bt-task-list,
+  .feature-view {
+    padding-bottom: 72px;
+  }
+
   .bt-status-bar {
+    left: 12px;
     right: 12px;
     bottom: 12px;
-    gap: 10px;
-    padding: 8px 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    border-radius: 12px;
     font-size: 12px;
   }
 }

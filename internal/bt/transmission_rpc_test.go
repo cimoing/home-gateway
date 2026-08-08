@@ -108,3 +108,20 @@ func TestBpsToTransmissionLimit(t *testing.T) {
 		t.Fatalf("10kib: %d %v", limit, limited)
 	}
 }
+
+func TestSessionLimitArgs(t *testing.T) {
+	args := sessionLimitArgs(10*1024, 0, 2)
+	if args["speed-limit-down"] != int64(10) || args["speed-limit-down-enabled"] != true {
+		t.Fatalf("download %#v", args)
+	}
+	if args["speed-limit-up-enabled"] != false {
+		t.Fatalf("upload unlimited %#v", args)
+	}
+	if args["seedRatioLimit"] != float64(2) || args["seedRatioLimited"] != true {
+		t.Fatalf("seed %#v", args)
+	}
+	disabled := sessionLimitArgs(0, 0, 0)
+	if disabled["seedRatioLimited"] != false || disabled["seedRatioLimit"] != float64(0) {
+		t.Fatalf("seed disabled %#v", disabled)
+	}
+}

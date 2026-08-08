@@ -52,36 +52,15 @@ func runServer(cmd *cobra.Command) error {
 	var btEnabled atomic.Bool
 	btEnabled.Store(config.BT.Enable)
 
-	var engine bt.Engine
 	var btService *bt.Service
 	if config.BT.Enable {
-		block := bt.BlockConfig{
-			Clients:  append([]string(nil), config.BT.Block.Clients...),
-			PeerIDs:  append([]string(nil), config.BT.Block.PeerIDs...),
-			Ports:    append([]int(nil), config.BT.Block.Ports...),
-			Networks: append([]string(nil), config.BT.Block.Networks...),
-		}
-		transmission, err := bt.NewTransmissionEngine(
-			config.BT.Transmission.URL,
-			config.BT.Transmission.Username,
-			config.BT.Transmission.Password,
-			config.BT.EngineDir,
-			config.BT.ListenPort,
-			config.BT.DownloadLimitBps.Int64(),
-			config.BT.UploadLimitBps.Int64(),
-			block,
-		)
-		if err != nil {
-			return fmt.Errorf("connect transmission RPC: %w", err)
-		}
-		engine = transmission
-		log.Printf("BT enabled via transmission RPC url=%s", config.BT.Transmission.URL)
-		btService = bt.NewService(engine, config.BT, configPath)
+		btService = bt.NewService(nil, config.BT, configPath)
 		defer func() {
 			if err := btService.Close(); err != nil {
 				log.Printf("BitTorrent shutdown failed: %v", err)
 			}
 		}()
+		go connectTransmission(cmd.Context(), btService, config.BT)
 	}
 
 	storageService := storage.NewService(config.Storage.Backends)
@@ -154,4 +133,39 @@ func runServer(cmd *cobra.Command) error {
 		return fmt.Errorf("server shutdown failed: %w", err)
 	}
 	return nil
+}
+
+func connectTransmission(ctx context.Context, service *bt.Service, config appconfig.BTConfig) {
+	if service == nil {
+		return
+	}
+	block := bt.BlockConfig{
+		Clients:  append([]string(nil), config.Block.Clients...),
+		PeerIDs:  append([]string(nil), config.Block.PeerIDs...),
+		Ports:    append([]int(nil), config.Block.Ports...),
+		Networks: append([]string(nil), config.Block.Networks...),
+	}
+	transmission, err := bt.NewTransmissionEngine(
+		config.Transmission.URL,
+		config.Transmission.Username,
+		config.Transmission.Password,
+		config.EngineDir,
+		config.ListenPort,
+		config.DownloadLimitBps.Int64(),
+		config.UploadLimitBps.Int64(),
+		config.SeedRatioLimit,
+		block,
+	)
+	if err != nil {
+		log.Printf("BT transmission connect failed: %v", err)
+		return
+	}
+	select {
+	case <-ctx.Done():
+		_ = transmission.Close()
+		return
+	default:
+	}
+	service.AttachEngine(transmission)
+	log.Printf("BT enabled via transmission RPC url=%s", config.Transmission.URL)
 }

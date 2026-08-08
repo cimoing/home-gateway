@@ -9,7 +9,7 @@ var (
 	ErrNotFound     = errors.New("BT task not found")
 	ErrConflict     = errors.New("BT task already exists")
 	ErrInvalidInput = errors.New("invalid BT input")
-	ErrUnavailable  = errors.New("BT engine unavailable")
+	ErrUnavailable  = errors.New("BT 引擎尚未就绪，请稍后重试")
 )
 
 // Engine owns the BitTorrent client (Transmission RPC).
@@ -23,9 +23,19 @@ type Engine interface {
 	ListRemote() ([]RemoteTorrent, error)
 	GetRemote(id int64) (RemoteTorrent, error)
 	Stats() EngineStats
-	SetRateLimits(downloadBps, uploadBps int64)
+	SessionSettings() (SessionSettings, error)
+	ApplySessionLimits(downloadBps, uploadBps int64, seedRatioLimit float64) error
 	SetBlockConfig(config BlockConfig) error
 	Close() error
+}
+
+// SessionSettings is the mutable Transmission session configuration shown in the UI.
+type SessionSettings struct {
+	DownloadDir      string
+	ListenPort       int
+	DownloadLimitBps int64
+	UploadLimitBps   int64
+	SeedRatioLimit   float64
 }
 
 // RemoteTorrent is a torrent snapshot from the remote engine.

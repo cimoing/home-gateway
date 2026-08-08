@@ -92,14 +92,15 @@ func (s *Service) UpdateFiles(
 
 // Delete removes a torrent from the remote engine.
 func (s *Service) Delete(_ context.Context, id int64, deleteData bool) error {
-	if s.engine == nil {
+	engine := s.getEngine()
+	if engine == nil {
 		return ErrUnavailable
 	}
-	remote, err := s.engine.GetRemote(id)
+	remote, err := engine.GetRemote(id)
 	if err != nil {
 		return mapTaskNotFound(err)
 	}
-	if err := s.engine.RemoveByID(id, deleteData); err != nil {
+	if err := engine.RemoveByID(id, deleteData); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -116,16 +117,17 @@ func (s *Service) Delete(_ context.Context, id int64, deleteData bool) error {
 }
 
 func (s *Service) runtimeByID(id int64) (EngineTask, error) {
-	if s.engine == nil {
+	engine := s.getEngine()
+	if engine == nil {
 		return nil, ErrUnavailable
 	}
-	if runtime, ok := s.engine.TaskByID(id); ok {
+	if runtime, ok := engine.TaskByID(id); ok {
 		return runtime, nil
 	}
-	if _, err := s.engine.GetRemote(id); err != nil {
+	if _, err := engine.GetRemote(id); err != nil {
 		return nil, mapTaskNotFound(err)
 	}
-	runtime, ok := s.engine.TaskByID(id)
+	runtime, ok := engine.TaskByID(id)
 	if !ok {
 		return nil, ErrUnavailable
 	}

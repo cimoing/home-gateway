@@ -10,10 +10,15 @@ import (
 )
 
 type fakeEngine struct {
-	mu     sync.Mutex
-	nextID int64
-	tasks  map[string]*fakeEngineTask
-	closed bool
+	mu              sync.Mutex
+	nextID          int64
+	tasks           map[string]*fakeEngineTask
+	closed          bool
+	appliedDownload int64
+	appliedUpload   int64
+	appliedSeed     float64
+	applyCalls      int
+	applyErr        error
 }
 
 func newFakeEngine() *fakeEngine {
@@ -141,8 +146,27 @@ func (e *fakeEngine) snapshotLocked(task *fakeEngineTask) RemoteTorrent {
 	}
 }
 
-func (e *fakeEngine) Stats() EngineStats               { return EngineStats{} }
-func (e *fakeEngine) SetRateLimits(int64, int64)       {}
+func (e *fakeEngine) Stats() EngineStats { return EngineStats{} }
+func (e *fakeEngine) SessionSettings() (SessionSettings, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return SessionSettings{
+		DownloadDir:      "/downloads",
+		ListenPort:       51413,
+		DownloadLimitBps: e.appliedDownload,
+		UploadLimitBps:   e.appliedUpload,
+		SeedRatioLimit:   e.appliedSeed,
+	}, nil
+}
+func (e *fakeEngine) ApplySessionLimits(download, upload int64, seed float64) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.applyCalls++
+	e.appliedDownload = download
+	e.appliedUpload = upload
+	e.appliedSeed = seed
+	return e.applyErr
+}
 func (e *fakeEngine) SetBlockConfig(BlockConfig) error { return nil }
 func (e *fakeEngine) Close() error {
 	e.closed = true
@@ -221,5 +245,63 @@ func TestServiceRemoteTaskLifecycle(t *testing.T) {
 	}
 	if _, err := service.GetTask(ctx, task.ID); err != ErrNotFound {
 		t.Fatalf("expected deleted task to be absent, got %v", err)
+	}
+}
+
+func TestUpdateSettingsSyncsTransmission(t *testing.T) {
+	engine := newFakeEngine()
+	service := NewService(engine, appconfig.BTConfig{Enable: true}, "")
+	defer service.Close()
+
+	download := int64(2048 * 1024)
+	upload := int64(512 * 1024)
+	seed := 1.5
+	settings, err := service.UpdateSettings(UpdateSettingsRequest{
+		DownloadLimitBps: &download,
+		UploadLimitBps:   &upload,
+		SeedRatioLimit:   &seed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.DownloadLimitBps != download || settings.UploadLimitBps != upload || settings.SeedRatioLimit != seed {
+		t.Fatalf("unexpected settings %+v", settings)
+	}
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	if engine.applyCalls != 1 ||
+		engine.appliedDownload != download ||
+		engine.appliedUpload != upload ||
+		engine.appliedSeed != seed {
+		t.Fatalf("session sync %#v", engine)
+	}
+}
+
+func TestUpdateSettingsRequiresEngine(t *testing.T) {
+	service := NewService(nil, appconfig.BTConfig{Enable: true}, "")
+	defer service.Close()
+	download := int64(1024)
+	if _, err := service.UpdateSettings(UpdateSettingsRequest{DownloadLimitBps: &download}); err != ErrUnavailable {
+		t.Fatalf("expected unavailable, got %v", err)
+	}
+}
+
+func TestSettingsPrefersRemoteSession(t *testing.T) {
+	engine := newFakeEngine()
+	engine.appliedDownload = 3 * 1024
+	engine.appliedUpload = 1024
+	engine.appliedSeed = 2.5
+	service := NewService(engine, appconfig.BTConfig{
+		Enable: true, DownloadDir: "/local", EngineDir: "/local", ListenPort: 1,
+		DownloadLimitBps: 0, UploadLimitBps: 0, SeedRatioLimit: 0,
+	}, "")
+	defer service.Close()
+
+	settings := service.Settings()
+	if settings.DownloadDir != "/downloads" || settings.ListenPort != 51413 {
+		t.Fatalf("path/port %#v", settings)
+	}
+	if settings.DownloadLimitBps != 3*1024 || settings.UploadLimitBps != 1024 || settings.SeedRatioLimit != 2.5 {
+		t.Fatalf("limits %#v", settings)
 	}
 }
