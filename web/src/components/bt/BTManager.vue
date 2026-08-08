@@ -202,27 +202,6 @@ async function copyMagnet(task: BTTask) {
   }, '磁力链接已复制。')
 }
 
-async function downloadTorrent(task: BTTask) {
-  await run(async () => {
-    const response = await fetch(`/api/bt/tasks/${task.id}/torrent`, { credentials: 'same-origin' })
-    if (!response.ok) {
-      const data = (await response.json().catch(() => ({}))) as { error?: string }
-      throw new Error(data.error || `下载失败（${response.status}）`)
-    }
-    const blob = await response.blob()
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    const disposition = response.headers.get('Content-Disposition') || ''
-    const matched = /filename="([^"]+)"/.exec(disposition)
-    anchor.href = url
-    anchor.download = matched?.[1] || `${task.name || task.infoHash}.magnet`
-    document.body.appendChild(anchor)
-    anchor.click()
-    anchor.remove()
-    URL.revokeObjectURL(url)
-  }, '种子/磁力文件已开始下载。')
-}
-
 async function saveFiles(files: Array<{ index: number; priority: number }>) {
   if (!selectedTask.value) return
   await run(async () => {
@@ -342,7 +321,6 @@ function taskAdded(task: BTTask) {
         @pause="control($event, 'pause')"
         @remove="removeTask"
         @copy-magnet="copyMagnet"
-        @download-torrent="downloadTorrent"
       />
     </template>
     <AddTorrentForm
@@ -355,6 +333,7 @@ function taskAdded(task: BTTask) {
       :settings="settings"
       :busy="busy"
       @save="saveSettings"
+      @refresh="loadSettings"
     />
 
     <TaskDetail

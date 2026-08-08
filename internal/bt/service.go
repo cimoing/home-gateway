@@ -76,18 +76,23 @@ type rateSample struct {
 // Service proxies BT operations to the remote Transmission engine.
 // Task state is never persisted locally.
 type Service struct {
-	engine       Engine
-	config       appconfig.BTConfig
-	configPath   string
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	mu           sync.Mutex
-	watchStarted bool
-	samples      map[string]rateSample
-	peerSamples  map[string]rateSample
-	global       rateSample
-	seedPaused   map[string]bool
+	engine           Engine
+	config           appconfig.BTConfig
+	configPath       string
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
+	mu               sync.Mutex
+	watchStarted     bool
+	samples          map[string]rateSample
+	peerSamples      map[string]rateSample
+	global           rateSample
+	seedPaused       map[string]bool
+	downloadRoot     string
+	listenPort       int
+	downloadLimitBps int64
+	uploadLimitBps   int64
+	seedRatioLimit   float64
 }
 
 // NewService creates a BT service. engine may be nil until AttachEngine.
@@ -106,6 +111,7 @@ func NewService(
 		seedPaused:  make(map[string]bool),
 	}
 	if engine != nil {
+		service.syncLimitsFromRemote(engine)
 		service.watchStarted = true
 		service.wg.Add(1)
 		go service.watchSeedRatio()
@@ -140,25 +146,48 @@ func (s *Service) AttachEngine(engine Engine) {
 	if previous != nil {
 		_ = previous.Close()
 	}
+	s.syncLimitsFromRemote(engine)
 	if startWatch {
 		s.wg.Add(1)
 		go s.watchSeedRatio()
 	}
 }
 
-// Settings returns runtime configuration, preferring live Transmission values.
+func (s *Service) syncLimitsFromRemote(engine Engine) {
+	if engine == nil {
+		return
+	}
+	remote, err := engine.SessionSettings()
+	if err != nil {
+		log.Printf("BT session settings read failed: %v", err)
+		return
+	}
+	s.mu.Lock()
+	s.downloadLimitBps = remote.DownloadLimitBps
+	s.uploadLimitBps = remote.UploadLimitBps
+	s.seedRatioLimit = remote.SeedRatioLimit
+	if remote.DownloadDir != "" {
+		s.downloadRoot = remote.DownloadDir
+	}
+	if remote.ListenPort > 0 {
+		s.listenPort = remote.ListenPort
+	}
+	s.mu.Unlock()
+}
+
+// Settings returns live Transmission session configuration when connected.
 func (s *Service) Settings() Settings {
 	s.mu.Lock()
 	settings := Settings{
 		Enabled:          s.config.Enable,
 		Engine:           "transmission",
-		DownloadDir:      s.config.DownloadDir,
-		DownloadRoot:     s.config.EngineDir,
-		ListenPort:       s.config.ListenPort,
+		DownloadDir:      s.downloadRoot,
+		DownloadRoot:     s.downloadRoot,
+		ListenPort:       s.listenPort,
 		Running:          s.engine != nil,
-		DownloadLimitBps: s.config.DownloadLimitBps.Int64(),
-		UploadLimitBps:   s.config.UploadLimitBps.Int64(),
-		SeedRatioLimit:   s.config.SeedRatioLimit,
+		DownloadLimitBps: s.downloadLimitBps,
+		UploadLimitBps:   s.uploadLimitBps,
+		SeedRatioLimit:   s.seedRatioLimit,
 		Block: appconfig.BTBlockConfig{
 			Clients:  append([]string(nil), s.config.Block.Clients...),
 			PeerIDs:  append([]string(nil), s.config.Block.PeerIDs...),
@@ -185,35 +214,31 @@ func (s *Service) Settings() Settings {
 	settings.Running = true
 
 	s.mu.Lock()
-	s.config.DownloadLimitBps = appconfig.ByteRate(remote.DownloadLimitBps)
-	s.config.UploadLimitBps = appconfig.ByteRate(remote.UploadLimitBps)
-	s.config.SeedRatioLimit = remote.SeedRatioLimit
+	s.downloadLimitBps = remote.DownloadLimitBps
+	s.uploadLimitBps = remote.UploadLimitBps
+	s.seedRatioLimit = remote.SeedRatioLimit
+	if remote.DownloadDir != "" {
+		s.downloadRoot = remote.DownloadDir
+	}
+	if remote.ListenPort > 0 {
+		s.listenPort = remote.ListenPort
+	}
 	s.mu.Unlock()
 	return settings
 }
 
-// ApplyConfig updates mutable BT settings from a reloaded YAML file.
+// ApplyConfig updates local enable/block/RPC settings from YAML.
+// Speed limits and seed ratio stay owned by Transmission and are refreshed from remote.
 func (s *Service) ApplyConfig(config appconfig.BTConfig) {
 	s.mu.Lock()
 	s.config.Enable = config.Enable
-	s.config.DownloadDir = config.DownloadDir
-	s.config.EngineDir = config.EngineDir
-	s.config.DownloadLimitBps = config.DownloadLimitBps
-	s.config.UploadLimitBps = config.UploadLimitBps
-	s.config.SeedRatioLimit = config.SeedRatioLimit
 	s.config.Block = config.Block
 	s.config.Transmission = config.Transmission
-	s.config.ListenPort = config.ListenPort
-	downloadLimit := s.config.DownloadLimitBps.Int64()
-	uploadLimit := s.config.UploadLimitBps.Int64()
-	seedRatio := s.config.SeedRatioLimit
 	block := blockConfigFromApp(s.config.Block)
 	engine := s.engine
 	s.mu.Unlock()
 	if engine != nil {
-		if err := engine.ApplySessionLimits(downloadLimit, uploadLimit, seedRatio); err != nil {
-			log.Printf("BT Transmission session sync failed: %v", err)
-		}
+		s.syncLimitsFromRemote(engine)
 		if err := engine.SetBlockConfig(block); err != nil {
 			log.Printf("BT blocklist reload failed: %v", err)
 		}
@@ -307,30 +332,33 @@ func (s *Service) UpdateSettings(request UpdateSettingsRequest) (Settings, error
 	}
 
 	s.mu.Lock()
+	downloadLimit := s.downloadLimitBps
+	uploadLimit := s.uploadLimitBps
+	seedRatio := s.seedRatioLimit
 	if request.DownloadLimitBps != nil {
 		if *request.DownloadLimitBps < 0 {
 			s.mu.Unlock()
 			return Settings{}, fmt.Errorf("%w: downloadLimitBps must be >= 0", ErrInvalidInput)
 		}
-		s.config.DownloadLimitBps = appconfig.ByteRate(*request.DownloadLimitBps)
+		downloadLimit = *request.DownloadLimitBps
 	}
 	if request.UploadLimitBps != nil {
 		if *request.UploadLimitBps < 0 {
 			s.mu.Unlock()
 			return Settings{}, fmt.Errorf("%w: uploadLimitBps must be >= 0", ErrInvalidInput)
 		}
-		s.config.UploadLimitBps = appconfig.ByteRate(*request.UploadLimitBps)
+		uploadLimit = *request.UploadLimitBps
 	}
 	if request.SeedRatioLimit != nil {
 		if *request.SeedRatioLimit < 0 {
 			s.mu.Unlock()
 			return Settings{}, fmt.Errorf("%w: seedRatioLimit must be >= 0", ErrInvalidInput)
 		}
-		s.config.SeedRatioLimit = *request.SeedRatioLimit
+		seedRatio = *request.SeedRatioLimit
 	}
-	downloadLimit := s.config.DownloadLimitBps.Int64()
-	uploadLimit := s.config.UploadLimitBps.Int64()
-	seedRatio := s.config.SeedRatioLimit
+	s.downloadLimitBps = downloadLimit
+	s.uploadLimitBps = uploadLimit
+	s.seedRatioLimit = seedRatio
 	s.mu.Unlock()
 
 	if err := engine.ApplySessionLimits(downloadLimit, uploadLimit, seedRatio); err != nil {
@@ -456,7 +484,7 @@ func (s *Service) enforceSeedRatio() {
 		return
 	}
 	s.mu.Lock()
-	limit := s.config.SeedRatioLimit
+	limit := s.seedRatioLimit
 	s.mu.Unlock()
 	if limit <= 0 {
 		s.clearSeedPauses()

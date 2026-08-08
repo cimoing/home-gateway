@@ -12,6 +12,18 @@
   box-sizing: border-box;
 }
 
+html {
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+html,
+body {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -263,7 +275,10 @@ button:disabled {
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  width: 100%;
+  max-width: 100%;
   padding: 6px;
   border: 1px solid rgb(148 163 184 / 16%);
   border-radius: 14px;
@@ -272,11 +287,16 @@ button:disabled {
 
 .module-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  width: 100%;
+  max-width: 100%;
   margin-bottom: 18px;
 }
 
 .module-tabs button {
+  flex: 1 1 0;
+  min-width: 0;
   width: auto;
   margin: 0;
   color: #94a3b8;
@@ -290,10 +310,13 @@ button:disabled {
 
 .feature-view {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .tabs button {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   margin: 0;
   color: #94a3b8;
   background: transparent;
@@ -544,6 +567,9 @@ th {
 .bt-task-panel {
   display: grid;
   gap: 10px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .bt-bulk-actions {
@@ -585,10 +611,14 @@ th {
   display: flex;
   gap: 12px;
   align-items: flex-start;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   padding: 14px;
   border: 1px solid rgb(148 163 184 / 14%);
   border-radius: 14px;
   background: rgb(30 41 59 / 42%);
+  overflow: hidden;
 }
 
 .bt-task-card.selected {
@@ -683,8 +713,11 @@ th {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 18px;
+  max-width: 100%;
   color: #94a3b8;
   font-size: 13px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .task-actions {
@@ -1085,22 +1118,49 @@ button.linkish {
   }
 
   .module-tabs {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .module-tabs button {
-    flex: 1 1 calc(50% - 8px);
+    flex: 1 1 0;
+    min-width: 0;
     min-height: 44px;
+    padding: 10px 8px;
+    font-size: 13px;
   }
 
   .record-form {
     grid-template-columns: 1fr;
   }
 
+  .tabs {
+    flex-wrap: nowrap;
+  }
+
   .tabs button {
+    flex: 1 1 0;
+    min-width: 0;
     min-height: 44px;
     padding: 10px 6px;
     font-size: 13px;
+  }
+
+  .bt-task-card {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .task-stats {
+    gap: 6px 12px;
+    font-size: 12px;
+  }
+
+  .task-title-row {
+    gap: 8px;
+  }
+
+  .task-title-row strong {
+    min-width: 0;
   }
 
   .bt-toolbar,

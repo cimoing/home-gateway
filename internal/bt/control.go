@@ -26,7 +26,7 @@ func (s *Service) Resume(_ context.Context, id int64) (model.BTTask, error) {
 	}
 	s.mu.Lock()
 	delete(s.seedPaused, runtime.InfoHash())
-	limit := s.config.SeedRatioLimit
+	limit := s.seedRatioLimit
 	s.mu.Unlock()
 	runtime.Resume()
 	if limit > 0 {

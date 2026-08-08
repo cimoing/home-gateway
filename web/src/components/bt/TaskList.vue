@@ -15,7 +15,6 @@ const emit = defineEmits<{
   pause: [task: BTTask]
   remove: [task: BTTask, deleteData: boolean]
   copyMagnet: [task: BTTask]
-  downloadTorrent: [task: BTTask]
 }>()
 
 const menu = ref<{
@@ -99,15 +98,14 @@ function closeMenu() {
   menu.value = null
 }
 
-function choose(action: 'pause' | 'remove' | 'removeData' | 'copy' | 'torrent') {
+function choose(action: 'pause' | 'remove' | 'removeData' | 'copy') {
   const task = menu.value?.task
   menu.value = null
   if (!task) return
   if (action === 'pause') emit('pause', task)
   else if (action === 'remove') emit('remove', task, false)
   else if (action === 'removeData') emit('remove', task, true)
-  else if (action === 'copy') emit('copyMagnet', task)
-  else emit('downloadTorrent', task)
+  else emit('copyMagnet', task)
 }
 
 function onWindowKeydown(event: KeyboardEvent) {
@@ -201,9 +199,6 @@ onBeforeUnmount(() => {
       </button>
       <button type="button" role="menuitem" :disabled="busy" @click="choose('copy')">
         复制磁力链接
-      </button>
-      <button type="button" role="menuitem" :disabled="busy" @click="choose('torrent')">
-        下载种子
       </button>
     </div>
   </div>

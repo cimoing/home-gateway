@@ -194,8 +194,7 @@ docker run --rm -it `
 
 - `bt.enable`：为 `true` 时显示「BT 下载」模块，并通过后端转发 **Transmission RPC**
   - `bt.transmission.url` / `username` / `password`：远程 daemon 地址（可用 `${ENV}`）
-  - `bt.download_dir`：transmission 侧下载路径（按 daemon 所见路径填写）
-  - `bt.listen_port`：通过 RPC 设置的 peer 端口（本进程不监听 BT 端口）
+  - 下载目录、端口、限速与分享率由 Transmission 会话提供，不在本地 YAML 配置
   - `GET /api/system/features`：返回 `{ features: { bt } }` 供前端决定是否展示模块
 - `storage.backends[]`：按**名称**定义 local / smb / s3；密钥用 `${ENV}`
   - Web「存储管理 → 同步」支持任意两个后端之间的双栏目录对比与复制（`POST /api/storage/sync/jobs`）

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import type { BTSettings } from './types'
 
 const props = defineProps<{ settings: BTSettings | null; busy: boolean }>()
@@ -9,6 +9,7 @@ const emit = defineEmits<{
     uploadLimitBps: number
     seedRatioLimit: number
   }]
+  refresh: []
 }>()
 
 const downloadLimitKib = ref(0)
@@ -26,6 +27,10 @@ watch(
   { immediate: true },
 )
 
+onMounted(() => {
+  emit('refresh')
+})
+
 function submit() {
   emit('save', {
     downloadLimitBps: Math.max(0, Math.round(downloadLimitKib.value)) * 1024,
@@ -39,7 +44,7 @@ function submit() {
   <section class="panel settings-panel">
     <div class="panel-heading">
       <h2>BT 引擎设置</h2>
-      <p>以下为 Transmission 远程会话配置；保存时直接写入远端（速度限制与分享率）。</p>
+      <p>全部从 Transmission 远程会话读取；保存只写远端，网关重启不会覆盖远程设置。</p>
     </div>
     <dl v-if="settings" class="detail-grid">
       <div>

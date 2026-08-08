@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"home-gateway/internal/model"
 
@@ -35,7 +34,6 @@ func (h *Handler) Register(api *gin.RouterGroup) {
 	group.GET("/tasks/:taskID/files", h.files)
 	group.GET("/tasks/:taskID/peers", h.peers)
 	group.GET("/tasks/:taskID/magnet", h.magnet)
-	group.GET("/tasks/:taskID/torrent", h.downloadTorrent)
 	group.POST("/tasks/:taskID/pause", h.pause)
 	group.POST("/tasks/:taskID/resume", h.resume)
 	group.PUT("/tasks/:taskID/files", h.updateFiles)
@@ -140,30 +138,6 @@ func (h *Handler) magnet(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"magnetLink": link})
-}
-
-func (h *Handler) downloadTorrent(c *gin.Context) {
-	id, ok := btPathID(c)
-	if !ok {
-		return
-	}
-	task, err := h.service.GetTask(c.Request.Context(), id)
-	if err != nil {
-		writeBTError(c, err)
-		return
-	}
-	link, err := h.service.MagnetLink(c.Request.Context(), id)
-	if err != nil {
-		writeBTError(c, err)
-		return
-	}
-	name := strings.TrimSpace(task.Name)
-	if name == "" {
-		name = task.InfoHash
-	}
-	name = sanitizeDownloadName(name) + ".magnet"
-	c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
-	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(link+"\n"))
 }
 
 func (h *Handler) addMagnet(c *gin.Context) {
@@ -299,22 +273,6 @@ func btPathID(c *gin.Context) (int64, bool) {
 		return 0, false
 	}
 	return id, true
-}
-
-func sanitizeDownloadName(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "torrent"
-	}
-	replacer := strings.NewReplacer(
-		"/", "_", "\\", "_", ":", "_", "*", "_", "?", "_",
-		"\"", "_", "<", "_", ">", "_", "|", "_",
-	)
-	name = replacer.Replace(name)
-	if len(name) > 120 {
-		name = name[:120]
-	}
-	return name
 }
 
 func writeBTError(c *gin.Context, err error) {

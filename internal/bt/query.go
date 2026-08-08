@@ -101,8 +101,10 @@ func (s *Service) enrichRemote(remote RemoteTorrent) model.BTTask {
 		CreatedAt:        remote.AddedAt,
 		UpdatedAt:        time.Now().UTC(),
 	}
-	if relative, err := s.config.RelativeTaskDir(remote.SavePath); err == nil {
-		task.SaveSubdir = relative
+	if root, err := s.ensureDownloadRoot(); err == nil {
+		if relative, err := relativeTaskDir(root, remote.SavePath); err == nil {
+			task.SaveSubdir = relative
+		}
 	}
 	s.mu.Lock()
 	task.SeedingPaused = s.seedPaused[remote.InfoHash]

@@ -219,9 +219,7 @@ func (t *fakeEngineTask) SetFiles(files []FileSelection) error {
 func TestServiceRemoteTaskLifecycle(t *testing.T) {
 	ctx := context.Background()
 	engine := newFakeEngine()
-	service := NewService(engine, appconfig.BTConfig{
-		Enable: true, DownloadDir: "/downloads", EngineDir: "/downloads", ListenPort: 51413,
-	}, "")
+	service := NewService(engine, appconfig.BTConfig{Enable: true}, "")
 	defer service.Close()
 
 	task, err := service.AddMagnet(ctx, "magnet:?xt=urn:btih:abc", AddOptions{
@@ -301,10 +299,7 @@ func TestSettingsPrefersRemoteSession(t *testing.T) {
 	engine.appliedDownload = 3 * 1024
 	engine.appliedUpload = 1024
 	engine.appliedSeed = 2.5
-	service := NewService(engine, appconfig.BTConfig{
-		Enable: true, DownloadDir: "/local", EngineDir: "/local", ListenPort: 1,
-		DownloadLimitBps: 0, UploadLimitBps: 0, SeedRatioLimit: 0,
-	}, "")
+	service := NewService(engine, appconfig.BTConfig{Enable: true}, "")
 	defer service.Close()
 
 	settings := service.Settings()

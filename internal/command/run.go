@@ -149,11 +149,6 @@ func connectTransmission(ctx context.Context, service *bt.Service, config appcon
 		config.Transmission.URL,
 		config.Transmission.Username,
 		config.Transmission.Password,
-		config.EngineDir,
-		config.ListenPort,
-		config.DownloadLimitBps.Int64(),
-		config.UploadLimitBps.Int64(),
-		config.SeedRatioLimit,
 		block,
 	)
 	if err != nil {

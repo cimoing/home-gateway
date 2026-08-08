@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -18,8 +17,6 @@ import (
 
 const (
 	DefaultPath            = "/config/config.yaml"
-	DefaultDownloadDir     = "/downloads"
-	DefaultPeerPort        = 51413
 	DefaultTransmissionURL = "https://bt.imoing.com/transmission/rpc"
 )
 
@@ -33,19 +30,12 @@ type Config struct {
 }
 
 // BTConfig controls the remote Transmission RPC download integration.
+// Download directory, peer port, and rate/ratio limits are owned by Transmission.
 type BTConfig struct {
 	// Enable shows the BT module and proxies task operations via Transmission RPC.
-	Enable           bool               `yaml:"enable" json:"enable"`
-	Transmission     TransmissionConfig `yaml:"transmission" json:"transmission"`
-	DownloadDir      string             `yaml:"download_dir" json:"downloadDir"`
-	ListenPort       int                `yaml:"listen_port" json:"listenPort"`
-	DownloadLimitBps ByteRate           `yaml:"download_limit_bps" json:"downloadLimitBps"`
-	UploadLimitBps   ByteRate           `yaml:"upload_limit_bps" json:"uploadLimitBps"`
-	SeedRatioLimit   float64            `yaml:"seed_ratio_limit" json:"seedRatioLimit"`
-	Block            BTBlockConfig      `yaml:"block" json:"block"`
-
-	// EngineDir is the download root path known to transmission-daemon.
-	EngineDir string `yaml:"-" json:"-"`
+	Enable       bool               `yaml:"enable" json:"enable"`
+	Transmission TransmissionConfig `yaml:"transmission" json:"transmission"`
+	Block        BTBlockConfig      `yaml:"block" json:"block"`
 }
 
 // TransmissionConfig configures the remote transmission-daemon RPC backend.
@@ -109,8 +99,6 @@ func Default() Config {
 	return Config{BT: BTConfig{
 		Enable:       false,
 		Transmission: TransmissionConfig{URL: DefaultTransmissionURL},
-		DownloadDir:  DefaultDownloadDir,
-		ListenPort:   DefaultPeerPort,
 	}}
 }
 
@@ -194,15 +182,6 @@ func normalize(config Config) (Config, error) {
 }
 
 func expandBT(bt BTConfig) (BTConfig, error) {
-	if strings.TrimSpace(bt.DownloadDir) == "" {
-		bt.DownloadDir = DefaultDownloadDir
-	}
-	if bt.ListenPort == 0 {
-		bt.ListenPort = DefaultPeerPort
-	}
-	if bt.ListenPort < 1 || bt.ListenPort > 65535 {
-		return BTConfig{}, errors.New("bt.listen_port must be between 1 and 65535")
-	}
 	if strings.TrimSpace(bt.Transmission.URL) == "" {
 		bt.Transmission.URL = DefaultTransmissionURL
 	}
@@ -225,12 +204,6 @@ func expandBT(bt BTConfig) (BTConfig, error) {
 			bt.Transmission.Password = expanded
 		}
 	}
-	if bt.DownloadLimitBps < 0 || bt.UploadLimitBps < 0 {
-		return BTConfig{}, errors.New("bt rate limits must be zero or positive")
-	}
-	if bt.SeedRatioLimit < 0 {
-		return BTConfig{}, errors.New("bt.seed_ratio_limit must be zero or positive")
-	}
 	if err := normalizeBTBlock(&bt.Block); err != nil {
 		return BTConfig{}, err
 	}
@@ -239,8 +212,6 @@ func expandBT(bt BTConfig) (BTConfig, error) {
 			return BTConfig{}, errors.New("bt.transmission.url is required when bt.enable is true")
 		}
 	}
-	// download_dir is the path as known by transmission-daemon (often absolute on that host).
-	bt.EngineDir = strings.TrimSpace(bt.DownloadDir)
 	return bt, nil
 }
 
@@ -306,77 +277,6 @@ func normalizeBTBlock(block *BTBlockConfig) error {
 	}
 	block.Networks = networks
 	return nil
-}
-
-func (c BTConfig) engineRoot() string {
-	if strings.TrimSpace(c.EngineDir) != "" {
-		return c.EngineDir
-	}
-	return c.DownloadDir
-}
-
-func usesRemotePOSIXRoot(root string) bool {
-	normalized := strings.ReplaceAll(strings.TrimSpace(root), "\\", "/")
-	return strings.HasPrefix(normalized, "/")
-}
-
-// ResolveTaskDir safely resolves a task subdirectory beneath the engine root.
-// Roots that start with "/" are treated as transmission-daemon POSIX paths.
-func (c BTConfig) ResolveTaskDir(subdirectory string) (string, error) {
-	root := strings.TrimSpace(c.engineRoot())
-	subdirectory = strings.TrimSpace(subdirectory)
-	if usesRemotePOSIXRoot(root) {
-		root = path.Clean(strings.ReplaceAll(root, "\\", "/"))
-		if subdirectory == "" || subdirectory == "." {
-			return root, nil
-		}
-		subdirectory = strings.ReplaceAll(subdirectory, "\\", "/")
-		if path.IsAbs(subdirectory) {
-			return "", errors.New("download subdirectory must be relative")
-		}
-		resolved := path.Clean(path.Join(root, subdirectory))
-		if resolved != root && !strings.HasPrefix(resolved, root+"/") {
-			return "", errors.New("download subdirectory escapes configured root")
-		}
-		return resolved, nil
-	}
-	if subdirectory == "" || subdirectory == "." {
-		return root, nil
-	}
-	if filepath.IsAbs(subdirectory) {
-		return "", errors.New("download subdirectory must be relative")
-	}
-	resolved := filepath.Clean(filepath.Join(root, subdirectory))
-	relative, err := filepath.Rel(root, resolved)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", errors.New("download subdirectory escapes configured root")
-	}
-	return resolved, nil
-}
-
-// RelativeTaskDir returns a safe path suitable for API responses.
-func (c BTConfig) RelativeTaskDir(value string) (string, error) {
-	root := strings.TrimSpace(c.engineRoot())
-	if usesRemotePOSIXRoot(root) {
-		root = path.Clean(strings.ReplaceAll(root, "\\", "/"))
-		cleaned := path.Clean(strings.ReplaceAll(value, "\\", "/"))
-		if cleaned == root {
-			return "", nil
-		}
-		prefix := root + "/"
-		if !strings.HasPrefix(cleaned, prefix) {
-			return "", errors.New("task path is outside configured root")
-		}
-		return strings.TrimPrefix(cleaned, prefix), nil
-	}
-	relative, err := filepath.Rel(root, filepath.Clean(value))
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", errors.New("task path is outside configured root")
-	}
-	if relative == "." {
-		return "", nil
-	}
-	return filepath.ToSlash(relative), nil
 }
 
 func expandStorage(storage StorageConfig) (StorageConfig, error) {

@@ -32,8 +32,6 @@ func TestBTEnableTransmissionConfig(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`
 bt:
   enable: true
-  download_dir: /var/lib/transmission/downloads
-  listen_port: 51413
   transmission:
     url: http://transmission:9091/transmission/rpc
     username: tr
@@ -47,9 +45,6 @@ bt:
 	}
 	if !config.BT.Enable {
 		t.Fatal("expected enable true")
-	}
-	if config.BT.EngineDir != "/var/lib/transmission/downloads" {
-		t.Fatalf("engine dir %q", config.BT.EngineDir)
 	}
 	if config.BT.Transmission.URL != "http://transmission:9091/transmission/rpc" {
 		t.Fatalf("url %q", config.BT.Transmission.URL)

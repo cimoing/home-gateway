@@ -14,12 +14,11 @@ import (
 
 // TransmissionEngine adapts transmission-daemon RPC to Engine.
 type TransmissionEngine struct {
-	rpc        *transmissionRPC
-	rootPath   string
-	listenPort int
-	blocker    *Blocker
-	mu         sync.Mutex
-	tasks      map[string]*transmissionTask
+	rpc      *transmissionRPC
+	rootPath string
+	blocker  *Blocker
+	mu       sync.Mutex
+	tasks    map[string]*transmissionTask
 }
 
 type transmissionTask struct {
@@ -32,15 +31,11 @@ type transmissionTask struct {
 }
 
 // NewTransmissionEngine connects to an existing transmission-daemon.
+// Session limits/directories are read from the daemon and never overwritten on connect.
 func NewTransmissionEngine(
 	rpcURL string,
 	username string,
 	password string,
-	downloadDir string,
-	listenPort int,
-	downloadLimitBps int64,
-	uploadLimitBps int64,
-	seedRatioLimit float64,
 	blockConfig BlockConfig,
 ) (*TransmissionEngine, error) {
 	blocker, err := NewBlocker(blockConfig)
@@ -48,13 +43,11 @@ func NewTransmissionEngine(
 		return nil, fmt.Errorf("configure BT blocklist: %w", err)
 	}
 	engine := &TransmissionEngine{
-		rpc:        newTransmissionRPC(rpcURL, username, password),
-		rootPath:   cleanRemotePath(downloadDir),
-		listenPort: listenPort,
-		blocker:    blocker,
-		tasks:      make(map[string]*transmissionTask),
+		rpc:     newTransmissionRPC(rpcURL, username, password),
+		blocker: blocker,
+		tasks:   make(map[string]*transmissionTask),
 	}
-	if err := engine.bootstrap(downloadLimitBps, uploadLimitBps, seedRatioLimit); err != nil {
+	if err := engine.bootstrap(); err != nil {
 		return nil, err
 	}
 	if err := engine.reloadTasks(); err != nil {
@@ -70,10 +63,7 @@ func NewTransmissionEngine(
 	return engine, nil
 }
 
-func (e *TransmissionEngine) bootstrap(
-	downloadLimitBps, uploadLimitBps int64,
-	seedRatioLimit float64,
-) error {
+func (e *TransmissionEngine) bootstrap() error {
 	var version struct {
 		Version string `json:"version"`
 	}
@@ -85,20 +75,13 @@ func (e *TransmissionEngine) bootstrap(
 			return fmt.Errorf("connect transmission: %w", err)
 		}
 	}
-	args := map[string]any{
-		"download-dir":              e.rootPath,
-		"peer-port":                 e.listenPort,
-		"peer-port-random-on-start": false,
-		"port-forwarding-enabled":   true,
-		"dht-enabled":               true,
-		"pex-enabled":               true,
-		"start-added-torrents":      false,
+	// Adopt live daemon paths/ports; do not push local YAML limits onto the session.
+	remote, err := e.SessionSettings()
+	if err != nil {
+		return fmt.Errorf("read transmission session: %w", err)
 	}
-	for key, value := range sessionLimitArgs(downloadLimitBps, uploadLimitBps, seedRatioLimit) {
-		args[key] = value
-	}
-	if err := e.rpc.call("session-set", args, nil); err != nil {
-		return fmt.Errorf("configure transmission session: %w", err)
+	if remote.DownloadDir != "" {
+		e.rootPath = cleanRemotePath(remote.DownloadDir)
 	}
 	return nil
 }
