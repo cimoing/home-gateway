@@ -23,6 +23,10 @@ const message = ref('')
 const statusFilter = ref('')
 const search = ref('')
 let timer: number | undefined
+/** Bumped on close/switch so in-flight detail fetches cannot reopen the dialog. */
+let selectionEpoch = 0
+/** Suppresses click-through onto task cards after the detail overlay closes. */
+let ignoreSelectUntil = 0
 
 onMounted(async () => {
   await Promise.all([loadTasks(), loadSettings(), loadStatus()])
@@ -31,7 +35,10 @@ onMounted(async () => {
     if (document.hidden) return
     void loadTasks(false)
     void loadStatus()
-    if (selectedTask.value) void refreshSelected(false)
+    if (selectedTask.value) {
+      const epoch = selectionEpoch
+      void refreshSelected(false, selectedTask.value.id, epoch)
+    }
   }, 2000)
 })
 
@@ -53,6 +60,14 @@ async function run(action: () => Promise<void>, success = '') {
   }
 }
 
+function closeDetail() {
+  selectionEpoch += 1
+  selectedTask.value = null
+  selectedFiles.value = []
+  selectedPeers.value = []
+  ignoreSelectUntil = Date.now() + 400
+}
+
 async function loadTasks(showError = true) {
   try {
     const query = new URLSearchParams()
@@ -61,8 +76,9 @@ async function loadTasks(showError = true) {
     const data = await api<{ tasks: BTTask[] }>(`/api/bt/tasks?${query}`)
     tasks.value = data.tasks || []
     if (selectedTask.value) {
+      const currentId = selectedTask.value.id
       selectedTask.value =
-        tasks.value.find((task) => task.id === selectedTask.value?.id) || selectedTask.value
+        tasks.value.find((task) => task.id === currentId) || selectedTask.value
     }
   } catch (reason) {
     if (showError) error.value = reason instanceof Error ? reason.message : '加载任务失败'
@@ -88,21 +104,29 @@ async function loadStatus() {
 }
 
 async function selectTask(task: BTTask) {
+  if (Date.now() < ignoreSelectUntil) return
+  const epoch = (selectionEpoch += 1)
   await run(async () => {
-    await refreshSelected(true, task.id)
+    await refreshSelected(true, task.id, epoch)
   })
 }
 
-async function refreshSelected(showError = true, taskId = selectedTask.value?.id) {
+async function refreshSelected(
+  showError = true,
+  taskId = selectedTask.value?.id,
+  epoch = selectionEpoch,
+) {
   if (!taskId) return
   try {
     const data = await api<{ task: BTTask; files: BTFile[]; peers: BTPeer[] }>(
       `/api/bt/tasks/${taskId}`,
     )
+    if (epoch !== selectionEpoch) return
     selectedTask.value = data.task
     selectedFiles.value = data.files || []
     selectedPeers.value = data.peers || []
   } catch (reason) {
+    if (epoch !== selectionEpoch) return
     if (showError) error.value = reason instanceof Error ? reason.message : '加载任务详情失败'
   }
 }
@@ -120,10 +144,7 @@ async function removeTask(task: BTTask) {
   const deleteData = confirm('是否同时删除已下载的数据？取消将保留文件。')
   await run(async () => {
     await api(`/api/bt/tasks/${task.id}?deleteData=${deleteData}`, { method: 'DELETE' })
-    if (selectedTask.value?.id === task.id) {
-      selectedTask.value = null
-      selectedPeers.value = []
-    }
+    if (selectedTask.value?.id === task.id) closeDetail()
     await loadTasks()
   }, deleteData ? '任务及下载数据已删除。' : '任务已删除，下载数据已保留。')
 }
@@ -231,7 +252,7 @@ function taskAdded(task: BTTask) {
       :files="selectedFiles"
       :peers="selectedPeers"
       :busy="busy"
-      @close="selectedTask = null; selectedPeers = []"
+      @close="closeDetail"
       @save-files="saveFiles"
       @block-peer="blockPeer"
     />

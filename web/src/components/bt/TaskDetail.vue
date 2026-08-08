@@ -243,14 +243,21 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="detail-backdrop" @click.self="emit('close')">
-    <section class="panel task-detail" role="dialog" aria-modal="true">
+  <div class="detail-backdrop" @pointerdown.self.prevent="emit('close')">
+    <section class="panel task-detail" role="dialog" aria-modal="true" @click.stop>
       <header>
         <div>
           <p class="eyebrow">任务详情</p>
           <h2>{{ task.name || task.infoHash }}</h2>
         </div>
-        <button class="small-button secondary-button" @click="emit('close')">关闭</button>
+        <button
+          type="button"
+          class="small-button secondary-button"
+          @pointerdown.stop
+          @click.stop.prevent="emit('close')"
+        >
+          关闭
+        </button>
       </header>
 
       <nav class="tabs detail-tabs" aria-label="任务详情分类">
