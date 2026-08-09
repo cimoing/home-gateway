@@ -360,6 +360,11 @@ func copyOneFile(
 				return err
 			}
 		} else {
+			// Parallel workers use their own SMB sessions; the shared backend
+			// session often idles out during a long transfer. Drop it so the
+			// next ensureDir/Stat dials fresh instead of hitting EOF.
+			invalidateIdleSMBSession(src)
+			invalidateIdleSMBSession(dst)
 			return nil
 		}
 	}

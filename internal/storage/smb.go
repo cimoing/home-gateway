@@ -129,6 +129,19 @@ func (b *smbBackend) invalidateSessionLocked() {
 	}
 }
 
+func invalidateIdleSMBSession(backend Backend) {
+	b, ok := backend.(*smbBackend)
+	if !ok {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.leases > 0 {
+		return
+	}
+	b.invalidateSessionLocked()
+}
+
 func isSMBConnError(err error) bool {
 	if err == nil {
 		return false
@@ -136,15 +149,23 @@ func isSMBConnError(err error) bool {
 	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 		return true
 	}
+	// go-smb2: PathError{Op:"stat", Err: TransportError{EOF}}. TransportError
+	// does not unwrap to EOF, so detect it explicitly for session reconnect.
+	var transport *smb2.TransportError
+	if errors.As(err, &transport) {
+		return true
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "broken pipe") ||
+	return strings.Contains(msg, "connection error") ||
+		strings.Contains(msg, "broken pipe") ||
 		strings.Contains(msg, "connection reset") ||
 		strings.Contains(msg, "use of closed") ||
-		strings.Contains(msg, "session") && strings.Contains(msg, "clos")
+		strings.Contains(msg, "eof") ||
+		(strings.Contains(msg, "session") && strings.Contains(msg, "clos"))
 }
 
 func (b *smbBackend) withShare(ctx context.Context, fn func(*smb2.Share) error) error {
