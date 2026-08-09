@@ -402,6 +402,116 @@ func (b *smbBackend) Close() error {
 	return nil
 }
 
+// PrepareParallelWrite creates/truncates the destination once (SMB3 share access allows later writers).
+func (b *smbBackend) PrepareParallelWrite(ctx context.Context, filePath string, size int64) error {
+	cleaned, err := cleanRelativePath(filePath)
+	if err != nil || cleaned == "" {
+		return fmt.Errorf("%w: file path is required", ErrInvalidInput)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return b.withShare(ctx, func(share *smb2.Share) error {
+		if dir := path.Dir(cleaned); dir != "." {
+			if err := mkdirAllSMB(share, dir); err != nil {
+				return err
+			}
+		}
+		file, err := share.Create(cleaned)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		if size > 0 {
+			return file.Truncate(size)
+		}
+		return nil
+	})
+}
+
+// OpenParallelReader opens an independent SMB3 session for range reads.
+func (b *smbBackend) OpenParallelReader(ctx context.Context, filePath string) (io.ReaderAt, io.Closer, error) {
+	cleaned, err := cleanRelativePath(filePath)
+	if err != nil || cleaned == "" {
+		return nil, nil, fmt.Errorf("%w: file path is required", ErrInvalidInput)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	session, err := b.dialSession(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	file, err := session.share.Open(cleaned)
+	if err != nil {
+		session.close()
+		if os.IsNotExist(err) {
+			return nil, nil, ErrNotFound
+		}
+		return nil, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		session.close()
+		return nil, nil, err
+	}
+	if info.IsDir() {
+		_ = file.Close()
+		session.close()
+		return nil, nil, fmt.Errorf("%w: path is a directory", ErrInvalidInput)
+	}
+	return file, &smbSessionHandle{session: session, file: file}, nil
+}
+
+// OpenParallelWriter opens an independent SMB3 session for range writes.
+func (b *smbBackend) OpenParallelWriter(ctx context.Context, filePath string) (io.WriterAt, io.Closer, error) {
+	cleaned, err := cleanRelativePath(filePath)
+	if err != nil || cleaned == "" {
+		return nil, nil, fmt.Errorf("%w: file path is required", ErrInvalidInput)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	session, err := b.dialSession(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	file, err := session.share.OpenFile(cleaned, os.O_RDWR, 0o666)
+	if err != nil {
+		session.close()
+		if os.IsNotExist(err) {
+			return nil, nil, ErrNotFound
+		}
+		return nil, nil, err
+	}
+	return file, &smbSessionHandle{session: session, file: file}, nil
+}
+
+type smbSessionHandle struct {
+	session *smbSession
+	file    *smb2.File
+}
+
+func (h *smbSessionHandle) Close() error {
+	var closeErr error
+	if h.file != nil {
+		closeErr = h.file.Close()
+		h.file = nil
+	}
+	if h.session != nil {
+		h.session.close()
+		h.session = nil
+	}
+	return closeErr
+}
+
 func (b *smbBackend) releaseLeaseLocked() {
 	if b.leases > 0 {
 		b.leases--

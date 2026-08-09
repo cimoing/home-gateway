@@ -348,6 +348,18 @@ func copyOneFile(
 			return err
 		}
 	}
+
+	// Large files: multi-connection range copy (SMB3 share access / local ReadAt+WriteAt).
+	if size >= parallelCopyMinSize && canParallelCopy(src, dst) {
+		if err := copyParallel(ctx, src, dst, sourcePath, destPath, size, job); err != nil {
+			if !errors.Is(err, errParallelUnsupported) {
+				return err
+			}
+		} else {
+			return nil
+		}
+	}
+
 	reader, err := src.Open(ctx, sourcePath)
 	if err != nil {
 		return err
@@ -359,7 +371,7 @@ func copyOneFile(
 	}
 	defer writer.Close()
 
-	buf := make([]byte, 256<<10)
+	buf := make([]byte, copyBufferSize)
 	var written int64
 	for {
 		if ctx.Err() != nil {

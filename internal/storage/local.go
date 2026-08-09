@@ -203,6 +203,66 @@ func (b *localBackend) Stat(_ context.Context, target string) (Entry, error) {
 
 func (b *localBackend) Close() error { return nil }
 
+func (b *localBackend) PrepareParallelWrite(_ context.Context, filePath string, size int64) error {
+	absolute, err := b.resolve(filePath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(absolute), 0o750); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(absolute, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+	if err != nil {
+		return err
+	}
+	if size > 0 {
+		if err := file.Truncate(size); err != nil {
+			_ = file.Close()
+			return err
+		}
+	}
+	return file.Close()
+}
+
+func (b *localBackend) OpenParallelReader(_ context.Context, filePath string) (io.ReaderAt, io.Closer, error) {
+	absolute, err := b.resolve(filePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	file, err := os.Open(absolute)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, ErrNotFound
+		}
+		return nil, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, err
+	}
+	if info.IsDir() {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("%w: path is a directory", ErrInvalidInput)
+	}
+	return file, file, nil
+}
+
+func (b *localBackend) OpenParallelWriter(_ context.Context, filePath string) (io.WriterAt, io.Closer, error) {
+	absolute, err := b.resolve(filePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	file, err := os.OpenFile(absolute, os.O_RDWR, 0o640)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, ErrNotFound
+		}
+		return nil, nil, err
+	}
+	return file, file, nil
+}
+
 func (b *localBackend) resolve(relative string) (string, error) {
 	cleaned, err := cleanRelativePath(relative)
 	if err != nil {
