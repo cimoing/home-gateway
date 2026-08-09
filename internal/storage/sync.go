@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,8 @@ import (
 	"sync"
 	"time"
 )
+
+var errTransferInFlight = errors.New("transfer already in progress")
 
 // SyncItem is one file or directory to copy between backends.
 type SyncItem struct {
@@ -29,19 +32,20 @@ type SyncJobRequest struct {
 
 // SyncJobStatus is the public progress snapshot.
 type SyncJobStatus struct {
-	ID           string    `json:"id"`
-	Status       string    `json:"status"`
-	Error        string    `json:"error,omitempty"`
-	SourceBackend string   `json:"sourceBackend"`
-	DestBackend  string    `json:"destBackend"`
-	TotalFiles   int       `json:"totalFiles"`
-	CopiedFiles  int       `json:"copiedFiles"`
-	FailedFiles  int       `json:"failedFiles"`
-	TotalBytes   int64     `json:"totalBytes"`
-	CopiedBytes  int64     `json:"copiedBytes"`
-	CurrentPath  string    `json:"currentPath,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID            string    `json:"id"`
+	Status        string    `json:"status"`
+	Error         string    `json:"error,omitempty"`
+	SourceBackend string    `json:"sourceBackend"`
+	DestBackend   string    `json:"destBackend"`
+	TotalFiles    int       `json:"totalFiles"`
+	CopiedFiles   int       `json:"copiedFiles"`
+	SkippedFiles  int       `json:"skippedFiles"`
+	FailedFiles   int       `json:"failedFiles"`
+	TotalBytes    int64     `json:"totalBytes"`
+	CopiedBytes   int64     `json:"copiedBytes"`
+	CurrentPath   string    `json:"currentPath,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 type syncJob struct {
@@ -53,6 +57,7 @@ type syncJob struct {
 	destBackend   string
 	totalFiles    int
 	copiedFiles   int
+	skippedFiles  int
 	failedFiles   int
 	totalBytes    int64
 	copiedBytes   int64
@@ -179,6 +184,7 @@ func (m *SyncJobs) run(ctx context.Context, service *Service, job *syncJob, requ
 		job.setStatus(syncJobFailed, err.Error())
 		return
 	}
+	plan = dedupeCopySteps(plan)
 	job.mu.Lock()
 	job.totalFiles = len(plan)
 	var totalBytes int64
@@ -208,7 +214,23 @@ func (m *SyncJobs) run(ctx context.Context, service *Service, job *syncJob, requ
 			formatByteSize(step.size),
 		)
 		fileStarted := time.Now()
-		if err := copyOneFile(ctx, src, dst, step.sourcePath, step.destPath, step.size, request.Overwrite, job); err != nil {
+		err := copyOneFile(
+			ctx, service.transfers, src, dst,
+			request.SourceBackend, request.DestBackend,
+			step.sourcePath, step.destPath, step.size, request.Overwrite, job,
+		)
+		if err != nil {
+			if errors.Is(err, errTransferInFlight) {
+				job.mu.Lock()
+				job.skippedFiles++
+				job.updatedAt = time.Now().UTC()
+				job.mu.Unlock()
+				log.Printf(
+					"storage copy job=%s skip in-flight src=%s:%s dst=%s:%s",
+					job.id, request.SourceBackend, step.sourcePath, request.DestBackend, step.destPath,
+				)
+				continue
+			}
 			job.mu.Lock()
 			job.failedFiles++
 			job.updatedAt = time.Now().UTC()
@@ -278,16 +300,42 @@ func buildCopyPlan(ctx context.Context, src Backend, items []SyncItem) ([]copySt
 	return steps, nil
 }
 
+func dedupeCopySteps(steps []copyStep) []copyStep {
+	if len(steps) < 2 {
+		return steps
+	}
+	seen := make(map[string]struct{}, len(steps))
+	out := make([]copyStep, 0, len(steps))
+	for _, step := range steps {
+		key := step.sourcePath + "\x00" + step.destPath
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, step)
+	}
+	return out
+}
+
 func copyOneFile(
 	ctx context.Context,
+	transfers *transferLock,
 	src Backend,
 	dst Backend,
+	srcBackend string,
+	dstBackend string,
 	sourcePath string,
 	destPath string,
 	size int64,
 	overwrite bool,
 	job *syncJob,
 ) error {
+	release, ok := transfers.TryBegin(srcBackend, sourcePath, dstBackend, destPath)
+	if !ok {
+		return errTransferInFlight
+	}
+	defer release()
+
 	if parent := path.Dir(destPath); parent != "." && parent != "" {
 		if err := ensureDir(ctx, dst, parent); err != nil {
 			return err
@@ -391,6 +439,7 @@ func (j *syncJob) snapshot() SyncJobStatus {
 		DestBackend:   j.destBackend,
 		TotalFiles:    j.totalFiles,
 		CopiedFiles:   j.copiedFiles,
+		SkippedFiles:  j.skippedFiles,
 		FailedFiles:   j.failedFiles,
 		TotalBytes:    j.totalBytes,
 		CopiedBytes:   j.copiedBytes,

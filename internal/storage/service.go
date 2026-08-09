@@ -26,17 +26,19 @@ type BackendView struct {
 
 // Service manages config-backed storage backends and file operations.
 type Service struct {
-	mu        sync.RWMutex
-	backends  map[string]config.StorageBackendConfig
-	syncJobs  *SyncJobs
-	scheduler *Scheduler
+	mu         sync.RWMutex
+	backends   map[string]config.StorageBackendConfig
+	syncJobs   *SyncJobs
+	scheduler  *Scheduler
+	transfers  *transferLock
 }
 
 // NewService creates a storage service from YAML backends.
 func NewService(backends []config.StorageBackendConfig) *Service {
 	service := &Service{
-		backends: make(map[string]config.StorageBackendConfig),
-		syncJobs: NewSyncJobs(),
+		backends:  make(map[string]config.StorageBackendConfig),
+		syncJobs:  NewSyncJobs(),
+		transfers: newTransferLock(),
 	}
 	service.Replace(backends)
 	return service

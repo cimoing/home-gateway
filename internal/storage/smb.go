@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hirochachacha/go-smb2"
@@ -25,7 +25,11 @@ type smbConfig struct {
 }
 
 type smbBackend struct {
-	cfg smbConfig
+	cfg     smbConfig
+	mu      sync.Mutex
+	session *smbSession
+	leases  int
+	closed  bool
 }
 
 func newSMBBackend(cfg smbConfig) (*smbBackend, error) {
@@ -69,7 +73,7 @@ func (s *smbSession) close() {
 	}
 }
 
-func (b *smbBackend) openSession(ctx context.Context) (*smbSession, error) {
+func (b *smbBackend) dialSession(ctx context.Context) (*smbSession, error) {
 	dialer := &net.Dialer{Timeout: 15 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", b.cfg.Host, b.cfg.Port))
 	if err != nil {
@@ -99,13 +103,70 @@ func (b *smbBackend) openSession(ctx context.Context) (*smbSession, error) {
 	return &smbSession{conn: conn, session: session, share: share}, nil
 }
 
+func (b *smbBackend) ensureSessionLocked(ctx context.Context) (*smbSession, error) {
+	if b.closed {
+		return nil, fmt.Errorf("%w: smb backend closed", ErrUnavailable)
+	}
+	if b.session != nil {
+		return b.session, nil
+	}
+	session, err := b.dialSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	b.session = session
+	return session, nil
+}
+
+func (b *smbBackend) invalidateSessionLocked() {
+	if b.session != nil {
+		b.session.close()
+		b.session = nil
+	}
+}
+
+func isSMBConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "use of closed") ||
+		strings.Contains(msg, "session") && strings.Contains(msg, "clos")
+}
+
 func (b *smbBackend) withShare(ctx context.Context, fn func(*smb2.Share) error) error {
-	session, err := b.openSession(ctx)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	session, err := b.ensureSessionLocked(ctx)
 	if err != nil {
 		return err
 	}
-	defer session.close()
-	return fn(session.share)
+	err = fn(session.share)
+	if err == nil || !isSMBConnError(err) {
+		return err
+	}
+	b.invalidateSessionLocked()
+	session, retryErr := b.ensureSessionLocked(ctx)
+	if retryErr != nil {
+		return err
+	}
+	err = fn(session.share)
+	if err != nil && isSMBConnError(err) {
+		b.invalidateSessionLocked()
+	}
+	return err
 }
 
 func (b *smbBackend) Ping(ctx context.Context) error {
@@ -225,30 +286,44 @@ func (b *smbBackend) Open(ctx context.Context, filePath string) (io.ReadCloser, 
 	if err != nil || cleaned == "" {
 		return nil, fmt.Errorf("%w: file path is required", ErrInvalidInput)
 	}
-	var data []byte
-	err = b.withShare(ctx, func(share *smb2.Share) error {
-		file, err := share.Open(cleaned)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return ErrNotFound
-			}
-			return err
-		}
-		defer file.Close()
-		info, err := file.Stat()
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return fmt.Errorf("%w: path is a directory", ErrInvalidInput)
-		}
-		data, err = io.ReadAll(file)
-		return err
-	})
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	session, err := b.ensureSessionLocked(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return io.NopCloser(bytes.NewReader(data)), nil
+	file, err := session.share.Open(cleaned)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		if isSMBConnError(err) {
+			b.invalidateSessionLocked()
+		}
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		if isSMBConnError(err) {
+			b.invalidateSessionLocked()
+		}
+		return nil, err
+	}
+	if info.IsDir() {
+		_ = file.Close()
+		return nil, fmt.Errorf("%w: path is a directory", ErrInvalidInput)
+	}
+	b.leases++
+	return &smbStreamReader{
+		ctx:     ctx,
+		backend: b,
+		file:    file,
+		path:    cleaned,
+	}, nil
 }
 
 func (b *smbBackend) Create(ctx context.Context, filePath string) (io.WriteCloser, error) {
@@ -259,20 +334,34 @@ func (b *smbBackend) Create(ctx context.Context, filePath string) (io.WriteClose
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	session, err := b.openSession(ctx)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	session, err := b.ensureSessionLocked(ctx)
 	if err != nil {
 		return nil, err
 	}
-	writer := &smbStreamWriter{
-		ctx:     ctx,
-		session: session,
-		path:    cleaned,
+	if dir := path.Dir(cleaned); dir != "." {
+		if err := mkdirAllSMB(session.share, dir); err != nil {
+			if isSMBConnError(err) {
+				b.invalidateSessionLocked()
+			}
+			return nil, err
+		}
 	}
-	if err := writer.openFile(); err != nil {
-		session.close()
+	file, err := session.share.Create(cleaned)
+	if err != nil {
+		if isSMBConnError(err) {
+			b.invalidateSessionLocked()
+		}
 		return nil, err
 	}
-	return writer, nil
+	b.leases++
+	return &smbStreamWriter{
+		ctx:     ctx,
+		backend: b,
+		file:    file,
+		path:    cleaned,
+	}, nil
 }
 
 func (b *smbBackend) Stat(ctx context.Context, target string) (Entry, error) {
@@ -305,31 +394,84 @@ func (b *smbBackend) Stat(ctx context.Context, target string) (Entry, error) {
 	return entry, err
 }
 
-func (b *smbBackend) Close() error { return nil }
+func (b *smbBackend) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	b.invalidateSessionLocked()
+	return nil
+}
+
+func (b *smbBackend) releaseLeaseLocked() {
+	if b.leases > 0 {
+		b.leases--
+	}
+}
+
+// smbStreamReader streams bytes from SMB without buffering the whole file.
+type smbStreamReader struct {
+	ctx     context.Context
+	backend *smbBackend
+	file    *smb2.File
+	path    string
+	closed  bool
+}
+
+func (r *smbStreamReader) Read(p []byte) (int, error) {
+	if r.closed {
+		return 0, errors.New("reader closed")
+	}
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if r.file == nil || r.backend == nil {
+		return 0, errors.New("smb reader not open")
+	}
+	r.backend.mu.Lock()
+	defer r.backend.mu.Unlock()
+	if r.closed || r.file == nil {
+		return 0, errors.New("reader closed")
+	}
+	n, err := r.file.Read(p)
+	if err != nil && err != io.EOF && isSMBConnError(err) {
+		r.backend.invalidateSessionLocked()
+	}
+	return n, err
+}
+
+func (r *smbStreamReader) Close() error {
+	if r.closed {
+		return nil
+	}
+	r.closed = true
+	if r.backend == nil {
+		if r.file != nil {
+			err := r.file.Close()
+			r.file = nil
+			return err
+		}
+		return nil
+	}
+	r.backend.mu.Lock()
+	defer r.backend.mu.Unlock()
+	var closeErr error
+	if r.file != nil {
+		closeErr = r.file.Close()
+		r.file = nil
+	}
+	r.backend.releaseLeaseLocked()
+	return closeErr
+}
 
 // smbStreamWriter streams bytes directly to SMB without buffering the whole file.
 type smbStreamWriter struct {
 	ctx     context.Context
-	session *smbSession
+	backend *smbBackend
 	file    *smb2.File
 	path    string
 	written int64
 	failed  bool
 	closed  bool
-}
-
-func (w *smbStreamWriter) openFile() error {
-	if dir := path.Dir(w.path); dir != "." {
-		if err := mkdirAllSMB(w.session.share, dir); err != nil {
-			return err
-		}
-	}
-	file, err := w.session.share.Create(w.path)
-	if err != nil {
-		return err
-	}
-	w.file = file
-	return nil
 }
 
 func (w *smbStreamWriter) Write(p []byte) (int, error) {
@@ -340,8 +482,13 @@ func (w *smbStreamWriter) Write(p []byte) (int, error) {
 		w.failed = true
 		return 0, err
 	}
-	if w.file == nil {
+	if w.file == nil || w.backend == nil {
 		return 0, errors.New("smb writer not open")
+	}
+	w.backend.mu.Lock()
+	defer w.backend.mu.Unlock()
+	if w.closed || w.file == nil {
+		return 0, errors.New("writer closed")
 	}
 	n, err := w.file.Write(p)
 	if n > 0 {
@@ -349,6 +496,9 @@ func (w *smbStreamWriter) Write(p []byte) (int, error) {
 	}
 	if err != nil {
 		w.failed = true
+		if isSMBConnError(err) {
+			w.backend.invalidateSessionLocked()
+		}
 	}
 	return n, err
 }
@@ -359,6 +509,24 @@ func (w *smbStreamWriter) Close() error {
 	}
 	w.closed = true
 
+	if w.backend == nil {
+		var closeErr error
+		if w.file != nil {
+			closeErr = w.file.Close()
+			w.file = nil
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if err := w.ctx.Err(); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	w.backend.mu.Lock()
+	defer w.backend.mu.Unlock()
+
 	var closeErr error
 	if w.file != nil {
 		closeErr = w.file.Close()
@@ -367,15 +535,10 @@ func (w *smbStreamWriter) Close() error {
 			w.failed = true
 		}
 	}
-	if w.failed || w.ctx.Err() != nil {
-		if w.session != nil && w.session.share != nil {
-			_ = w.session.share.Remove(w.path)
-		}
+	if (w.failed || w.ctx.Err() != nil) && w.backend.session != nil && w.backend.session.share != nil {
+		_ = w.backend.session.share.Remove(w.path)
 	}
-	if w.session != nil {
-		w.session.close()
-		w.session = nil
-	}
+	w.backend.releaseLeaseLocked()
 	if closeErr != nil {
 		return closeErr
 	}

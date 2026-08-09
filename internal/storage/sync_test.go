@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -64,6 +65,83 @@ func TestSyncJobCopiesBetweenLocalBackends(t *testing.T) {
 	}
 	if string(data) != "hello-sync" {
 		t.Fatalf("copied content %q", data)
+	}
+}
+
+func TestDedupeCopyStepsRemovesDuplicatePairs(t *testing.T) {
+	steps := []copyStep{
+		{sourcePath: "a.txt", destPath: "b/a.txt", size: 1},
+		{sourcePath: "a.txt", destPath: "b/a.txt", size: 1},
+		{sourcePath: "c.txt", destPath: "b/c.txt", size: 2},
+	}
+	got := dedupeCopySteps(steps)
+	if len(got) != 2 {
+		t.Fatalf("deduped len=%d want 2: %#v", len(got), got)
+	}
+	if got[0].sourcePath != "a.txt" || got[1].sourcePath != "c.txt" {
+		t.Fatalf("unexpected order %#v", got)
+	}
+}
+
+func TestTransferLockPreventsConcurrentSamePair(t *testing.T) {
+	lock := newTransferLock()
+	release, ok := lock.TryBegin("src", "file.txt", "dst", "file.txt")
+	if !ok {
+		t.Fatal("expected first begin to succeed")
+	}
+	if _, ok := lock.TryBegin("src", "file.txt", "dst", "file.txt"); ok {
+		t.Fatal("expected duplicate begin to fail")
+	}
+	if _, ok := lock.TryBegin("src", "other.txt", "dst", "other.txt"); !ok {
+		t.Fatal("expected different pair to succeed")
+	}
+	release()
+	if _, ok := lock.TryBegin("src", "file.txt", "dst", "file.txt"); !ok {
+		t.Fatal("expected begin after release to succeed")
+	}
+}
+
+func TestCopyOneFileSkipsInFlightTransfer(t *testing.T) {
+	root := t.TempDir()
+	srcRoot := filepath.Join(root, "src")
+	dstRoot := filepath.Join(root, "dst")
+	if err := os.MkdirAll(srcRoot, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dstRoot, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcRoot, "note.txt"), []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src, err := OpenFromConfig(config.StorageBackendConfig{
+		Name: "src", Type: "local", Config: map[string]any{"root": srcRoot},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	dst, err := OpenFromConfig(config.StorageBackendConfig{
+		Name: "dst", Type: "local", Config: map[string]any{"root": dstRoot},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+
+	lock := newTransferLock()
+	release, ok := lock.TryBegin("src", "note.txt", "dst", "note.txt")
+	if !ok {
+		t.Fatal("setup begin failed")
+	}
+	defer release()
+
+	err = copyOneFile(
+		context.Background(), lock, src, dst, "src", "dst",
+		"note.txt", "note.txt", 4, true, nil,
+	)
+	if !errors.Is(err, errTransferInFlight) {
+		t.Fatalf("error=%v want %v", err, errTransferInFlight)
 	}
 }
 

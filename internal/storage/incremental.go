@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"path"
@@ -84,7 +85,19 @@ func (s *Service) SyncIncremental(ctx context.Context, rule config.StorageSyncRu
 			index+1, len(files), reason, srcName, file.path, dstName, target, formatByteSize(file.size),
 		)
 		started := time.Now()
-		if err := copyOneFile(ctx, src, dst, file.path, target, file.size, true, nil); err != nil {
+		err := copyOneFile(
+			ctx, s.transfers, src, dst, srcName, dstName,
+			file.path, target, file.size, true, nil,
+		)
+		if err != nil {
+			if errors.Is(err, errTransferInFlight) {
+				log.Printf(
+					"storage sync skip in-flight src=%s:%s dst=%s:%s",
+					srcName, file.path, dstName, target,
+				)
+				result.Skipped++
+				continue
+			}
 			log.Printf(
 				"storage sync copy failed src=%s:%s dst=%s:%s err=%v",
 				srcName, file.path, dstName, target, err,

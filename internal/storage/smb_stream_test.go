@@ -11,9 +11,10 @@ import (
 func TestSMBStreamWriterHonorsContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	writer := &smbStreamWriter{
-		ctx:    ctx,
-		closed: false,
-		file:   nil,
+		ctx:     ctx,
+		backend: &smbBackend{},
+		closed:  false,
+		file:    nil,
 	}
 	cancel()
 	_, err := writer.Write([]byte("data"))
