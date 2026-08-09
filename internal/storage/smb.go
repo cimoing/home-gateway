@@ -82,6 +82,10 @@ func (b *smbBackend) dialSession(ctx context.Context) (*smbSession, error) {
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		_ = tcp.SetKeepAlive(true)
 		_ = tcp.SetKeepAlivePeriod(30 * time.Second)
+		_ = tcp.SetNoDelay(true)
+		// Larger buffers help high-BDP LAN links (gigabit + non-trivial RTT).
+		_ = tcp.SetReadBuffer(8 << 20)
+		_ = tcp.SetWriteBuffer(8 << 20)
 	}
 	session, err := (&smb2.Dialer{
 		Initiator: &smb2.NTLMInitiator{
@@ -402,7 +406,7 @@ func (b *smbBackend) Close() error {
 	return nil
 }
 
-// PrepareParallelWrite creates/truncates the destination once (SMB3 share access allows later writers).
+// PrepareParallelWrite creates an empty destination once (SMB3 share access allows later writers).
 func (b *smbBackend) PrepareParallelWrite(ctx context.Context, filePath string, size int64) error {
 	cleaned, err := cleanRelativePath(filePath)
 	if err != nil || cleaned == "" {
@@ -417,15 +421,14 @@ func (b *smbBackend) PrepareParallelWrite(ctx context.Context, filePath string, 
 				return err
 			}
 		}
+		// Create/truncate to empty only. Avoid Truncate(size): some NAS stall or
+		// serialize subsequent multi-connection WriteAt after a large preallocate.
 		file, err := share.Create(cleaned)
 		if err != nil {
 			return err
 		}
-		defer file.Close()
-		if size > 0 {
-			return file.Truncate(size)
-		}
-		return nil
+		_ = size
+		return file.Close()
 	})
 }
 

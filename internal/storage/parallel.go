@@ -7,14 +7,16 @@ import (
 	"io"
 	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 const (
 	// Single large-file transfers use multiple SMB3 sessions / local handles.
-	parallelCopyMinSize  = 32 << 20 // 32 MiB
-	parallelCopyWorkers  = 4
-	parallelCopyChunkSize = 8 << 20 // 8 MiB
-	copyBufferSize       = 1 << 20  // 1 MiB (aligned with SMB Large MTU)
+	parallelCopyMinSize   = 8 << 20  // 8 MiB
+	parallelCopyWorkers   = 8
+	parallelCopyChunkSize = 4 << 20  // 4 MiB
+	copyBufferSize        = 1 << 20  // 1 MiB (aligned with SMB Large MTU)
 )
 
 var errParallelUnsupported = errors.New("parallel copy unsupported")
@@ -58,7 +60,7 @@ func copyParallel(
 
 	workers := parallelCopyWorkers
 	if size < parallelCopyChunkSize*int64(workers) {
-		workers = int(size/parallelCopyChunkSize) + 1
+		workers = int((size+parallelCopyChunkSize-1)/parallelCopyChunkSize)
 		if workers < 1 {
 			workers = 1
 		}
@@ -68,9 +70,32 @@ func copyParallel(
 	}
 
 	log.Printf(
-		"storage copy parallel src=%s dst=%s size=%s workers=%d chunk=%s",
-		sourcePath, destPath, formatByteSize(size), workers, formatByteSize(parallelCopyChunkSize),
+		"storage copy parallel src=%s dst=%s size=%s workers=%d chunk=%s buffer=%s",
+		sourcePath, destPath, formatByteSize(size), workers,
+		formatByteSize(parallelCopyChunkSize), formatByteSize(copyBufferSize),
 	)
+
+	// Local files can share one handle (ReadAt/WriteAt are concurrency-safe).
+	var sharedReader io.ReaderAt
+	var sharedReaderCloser io.Closer
+	var sharedWriter io.WriterAt
+	var sharedWriterCloser io.Closer
+	if _, ok := src.(*localBackend); ok {
+		reader, closer, err := srcP.OpenParallelReader(ctx, sourcePath)
+		if err != nil {
+			return err
+		}
+		sharedReader, sharedReaderCloser = reader, closer
+		defer sharedReaderCloser.Close()
+	}
+	if _, ok := dst.(*localBackend); ok {
+		writer, closer, err := dstP.OpenParallelWriter(ctx, destPath)
+		if err != nil {
+			return err
+		}
+		sharedWriter, sharedWriterCloser = writer, closer
+		defer sharedWriterCloser.Close()
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -89,29 +114,73 @@ func copyParallel(
 		})
 	}
 
+	var transferred atomic.Int64
+	started := time.Now()
+	stopRateLog := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		var previous int64
+		previousAt := started
+		for {
+			select {
+			case <-stopRateLog:
+				return
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				current := transferred.Load()
+				elapsed := now.Sub(previousAt).Seconds()
+				if elapsed <= 0 {
+					continue
+				}
+				delta := current - previous
+				log.Printf(
+					"storage copy parallel progress src=%s dst=%s transferred=%s rate=%s/s workers=%d",
+					sourcePath, destPath, formatByteSize(current),
+					formatByteSize(int64(float64(delta)/elapsed)), workers,
+				)
+				previous = current
+				previousAt = now
+			}
+		}
+	}()
+
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			reader, readerCloser, err := srcP.OpenParallelReader(ctx, sourcePath)
-			if err != nil {
-				fail(err)
-				return
+
+			reader := sharedReader
+			var readerCloser io.Closer
+			if reader == nil {
+				opened, closer, err := srcP.OpenParallelReader(ctx, sourcePath)
+				if err != nil {
+					fail(err)
+					return
+				}
+				reader, readerCloser = opened, closer
+				defer readerCloser.Close()
 			}
-			defer readerCloser.Close()
-			writer, writerCloser, err := dstP.OpenParallelWriter(ctx, destPath)
-			if err != nil {
-				fail(err)
-				return
+
+			writer := sharedWriter
+			var writerCloser io.Closer
+			if writer == nil {
+				opened, closer, err := dstP.OpenParallelWriter(ctx, destPath)
+				if err != nil {
+					fail(err)
+					return
+				}
+				writer, writerCloser = opened, closer
+				defer writerCloser.Close()
 			}
-			defer writerCloser.Close()
 
 			buf := make([]byte, copyBufferSize)
 			for chunk := range chunks {
 				if ctx.Err() != nil {
 					return
 				}
-				if err := copyChunkAt(ctx, reader, writer, buf, chunk.offset, chunk.length, job); err != nil {
+				if err := copyChunkAt(ctx, reader, writer, buf, chunk.offset, chunk.length, job, &transferred); err != nil {
 					fail(err)
 					return
 				}
@@ -135,6 +204,18 @@ func copyParallel(
 	}
 	close(chunks)
 	wg.Wait()
+	close(stopRateLog)
+
+	elapsed := time.Since(started).Seconds()
+	total := transferred.Load()
+	if elapsed > 0 {
+		log.Printf(
+			"storage copy parallel done src=%s dst=%s transferred=%s elapsed=%s avg_rate=%s/s",
+			sourcePath, destPath, formatByteSize(total),
+			time.Since(started).Round(time.Millisecond),
+			formatByteSize(int64(float64(total)/elapsed)),
+		)
+	}
 	if copyErr != nil {
 		return copyErr
 	}
@@ -149,6 +230,7 @@ func copyChunkAt(
 	offset int64,
 	length int64,
 	job *syncJob,
+	transferred *atomic.Int64,
 ) error {
 	remaining := length
 	pos := offset
@@ -165,6 +247,9 @@ func copyChunkAt(
 		}
 		if err := writeExactAt(writer, buf[:n], pos); err != nil {
 			return fmt.Errorf("write at %d: %w", pos, err)
+		}
+		if transferred != nil {
+			transferred.Add(int64(n))
 		}
 		if job != nil {
 			job.addBytes(int64(n))

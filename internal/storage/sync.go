@@ -41,30 +41,34 @@ type SyncJobStatus struct {
 	CopiedFiles   int       `json:"copiedFiles"`
 	SkippedFiles  int       `json:"skippedFiles"`
 	FailedFiles   int       `json:"failedFiles"`
-	TotalBytes    int64     `json:"totalBytes"`
-	CopiedBytes   int64     `json:"copiedBytes"`
-	CurrentPath   string    `json:"currentPath,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	TotalBytes     int64     `json:"totalBytes"`
+	CopiedBytes    int64     `json:"copiedBytes"`
+	CopyRateBps    int64     `json:"copyRateBps"`
+	CurrentPath    string    `json:"currentPath,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 type syncJob struct {
-	mu            sync.Mutex
-	id            string
-	status        string
-	errMessage    string
-	sourceBackend string
-	destBackend   string
-	totalFiles    int
-	copiedFiles   int
-	skippedFiles  int
-	failedFiles   int
-	totalBytes    int64
-	copiedBytes   int64
-	currentPath   string
-	createdAt     time.Time
-	updatedAt     time.Time
-	cancel        context.CancelFunc
+	mu             sync.Mutex
+	id             string
+	status         string
+	errMessage     string
+	sourceBackend  string
+	destBackend    string
+	totalFiles     int
+	copiedFiles    int
+	skippedFiles   int
+	failedFiles    int
+	totalBytes     int64
+	copiedBytes    int64
+	copyRateBps    int64
+	rateSampleAt   time.Time
+	rateSampleBytes int64
+	currentPath    string
+	createdAt      time.Time
+	updatedAt      time.Time
+	cancel         context.CancelFunc
 }
 
 const (
@@ -455,6 +459,7 @@ func (j *syncJob) snapshot() SyncJobStatus {
 		FailedFiles:   j.failedFiles,
 		TotalBytes:    j.totalBytes,
 		CopiedBytes:   j.copiedBytes,
+		CopyRateBps:   j.copyRateBps,
 		CurrentPath:   j.currentPath,
 		CreatedAt:     j.createdAt,
 		UpdatedAt:     j.updatedAt,
@@ -483,7 +488,21 @@ func (j *syncJob) addBytes(n int64) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.copiedBytes += n
-	j.updatedAt = time.Now().UTC()
+	now := time.Now()
+	j.updatedAt = now.UTC()
+	if j.rateSampleAt.IsZero() {
+		j.rateSampleAt = now
+		j.rateSampleBytes = j.copiedBytes
+		return
+	}
+	elapsed := now.Sub(j.rateSampleAt).Seconds()
+	if elapsed < 0.8 {
+		return
+	}
+	delta := j.copiedBytes - j.rateSampleBytes
+	j.copyRateBps = int64(float64(delta) / elapsed)
+	j.rateSampleAt = now
+	j.rateSampleBytes = j.copiedBytes
 }
 
 func newSyncJobID() string {

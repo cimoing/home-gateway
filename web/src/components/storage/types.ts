@@ -25,8 +25,10 @@ export interface SyncJob {
   totalFiles: number
   copiedFiles: number
   failedFiles: number
+  skippedFiles?: number
   totalBytes: number
   copiedBytes: number
+  copyRateBps?: number
   currentPath?: string
   createdAt: string
   updatedAt: string

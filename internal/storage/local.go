@@ -208,18 +208,13 @@ func (b *localBackend) PrepareParallelWrite(_ context.Context, filePath string, 
 	if err != nil {
 		return err
 	}
+	_ = size
 	if err := os.MkdirAll(filepath.Dir(absolute), 0o750); err != nil {
 		return err
 	}
 	file, err := os.OpenFile(absolute, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
 	if err != nil {
 		return err
-	}
-	if size > 0 {
-		if err := file.Truncate(size); err != nil {
-			_ = file.Close()
-			return err
-		}
 	}
 	return file.Close()
 }

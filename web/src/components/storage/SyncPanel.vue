@@ -246,6 +246,9 @@ async function cancelJob() {
       {{ job.copiedFiles }}/{{ job.totalFiles }} 文件，
       {{ formatBytes(job.copiedBytes) }}
       <template v-if="job.totalBytes"> / {{ formatBytes(job.totalBytes) }}</template>
+      <template v-if="job.copyRateBps && (job.status === 'queued' || job.status === 'running')">
+        · {{ formatBytes(job.copyRateBps) }}/s
+      </template>
       <template v-if="job.currentPath"> · {{ job.currentPath }}</template>
       <button
         v-if="job.status === 'queued' || job.status === 'running'"
