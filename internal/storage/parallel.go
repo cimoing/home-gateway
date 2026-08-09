@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	// Single large-file transfers use multiple SMB3 sessions / local handles.
-	parallelCopyMinSize   = 8 << 20  // 8 MiB
-	parallelCopyWorkers   = 8
-	parallelCopyChunkSize = 4 << 20  // 4 MiB
-	copyBufferSize        = 1 << 20  // 1 MiB (aligned with SMB Large MTU)
+	// Large-file copy uses ranged I/O with a deep pipeline. go-smb2 caps each
+	// SMB READ/WRITE at 1 MiB, so buffer size matches that unit.
+	parallelCopyMinSize   = 8 << 20 // 8 MiB
+	parallelCopyWorkers   = 16
+	parallelCopyChunkSize = 1 << 20 // 1 MiB (= one SMB Large MTU write)
+	copyBufferSize        = 1 << 20
 )
 
 var errParallelUnsupported = errors.New("parallel copy unsupported")
@@ -60,7 +61,7 @@ func copyParallel(
 
 	workers := parallelCopyWorkers
 	if size < parallelCopyChunkSize*int64(workers) {
-		workers = int((size+parallelCopyChunkSize-1)/parallelCopyChunkSize)
+		workers = int((size + parallelCopyChunkSize - 1) / parallelCopyChunkSize)
 		if workers < 1 {
 			workers = 1
 		}
@@ -69,33 +70,27 @@ func copyParallel(
 		}
 	}
 
-	log.Printf(
-		"storage copy parallel src=%s dst=%s size=%s workers=%d chunk=%s buffer=%s",
-		sourcePath, destPath, formatByteSize(size), workers,
-		formatByteSize(parallelCopyChunkSize), formatByteSize(copyBufferSize),
-	)
+	// Prefer one shared ReaderAt/WriterAt per side. For SMB this means a single
+	// session with concurrent ReadAt/WriteAt pipelining (go-smb2 allows multiple
+	// outstanding requests on one TCP connection). Multi-session writers to the
+	// same NAS file are often serialized and stick around ~single-stream speed.
+	reader, readerCloser, err := srcP.OpenParallelReader(ctx, sourcePath)
+	if err != nil {
+		return err
+	}
+	defer readerCloser.Close()
 
-	// Local files can share one handle (ReadAt/WriteAt are concurrency-safe).
-	var sharedReader io.ReaderAt
-	var sharedReaderCloser io.Closer
-	var sharedWriter io.WriterAt
-	var sharedWriterCloser io.Closer
-	if _, ok := src.(*localBackend); ok {
-		reader, closer, err := srcP.OpenParallelReader(ctx, sourcePath)
-		if err != nil {
-			return err
-		}
-		sharedReader, sharedReaderCloser = reader, closer
-		defer sharedReaderCloser.Close()
+	writer, writerCloser, err := dstP.OpenParallelWriter(ctx, destPath)
+	if err != nil {
+		return err
 	}
-	if _, ok := dst.(*localBackend); ok {
-		writer, closer, err := dstP.OpenParallelWriter(ctx, destPath)
-		if err != nil {
-			return err
-		}
-		sharedWriter, sharedWriterCloser = writer, closer
-		defer sharedWriterCloser.Close()
-	}
+	defer writerCloser.Close()
+
+	log.Printf(
+		"storage copy parallel src=%s dst=%s size=%s workers=%d chunk=%s mode=pipeline",
+		sourcePath, destPath, formatByteSize(size), workers,
+		formatByteSize(parallelCopyChunkSize),
+	)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -150,31 +145,6 @@ func copyParallel(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-
-			reader := sharedReader
-			var readerCloser io.Closer
-			if reader == nil {
-				opened, closer, err := srcP.OpenParallelReader(ctx, sourcePath)
-				if err != nil {
-					fail(err)
-					return
-				}
-				reader, readerCloser = opened, closer
-				defer readerCloser.Close()
-			}
-
-			writer := sharedWriter
-			var writerCloser io.Closer
-			if writer == nil {
-				opened, closer, err := dstP.OpenParallelWriter(ctx, destPath)
-				if err != nil {
-					fail(err)
-					return
-				}
-				writer, writerCloser = opened, closer
-				defer writerCloser.Close()
-			}
-
 			buf := make([]byte, copyBufferSize)
 			for chunk := range chunks {
 				if ctx.Err() != nil {
