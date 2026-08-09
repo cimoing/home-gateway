@@ -903,6 +903,48 @@ th {
   justify-content: flex-end;
 }
 
+.file-selection-heading {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.file-heading-meta {
+  min-width: 0;
+}
+
+.file-heading-meta p {
+  overflow-wrap: anywhere;
+}
+
+.file-selection-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.file-selection-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.file-selection-filters .small-button {
+  min-height: 36px;
+  padding: 7px 12px;
+  font-size: 13px;
+}
+
+.file-selection-save {
+  margin: 0;
+  min-height: 36px;
+  padding: 8px 16px;
+  white-space: nowrap;
+}
+
 .storage-crumbs {
   display: flex;
   flex-wrap: wrap;
@@ -1297,6 +1339,46 @@ button.linkish {
   .file-heading-actions button {
     width: 100%;
     min-height: 44px;
+  }
+
+  .file-selection-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .file-selection-filters {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .file-selection-filters .small-button {
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 10px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .file-selection-save {
+    width: 100%;
+    min-height: 44px;
+    order: 1;
+  }
+
+  .file-tree-table th:last-child,
+  .file-tree-table td:last-child {
+    width: 5.5rem;
+  }
+
+  .file-tree-table select {
+    width: 100%;
+    max-width: 5.5rem;
+    min-height: 36px;
+    padding: 6px 8px;
+    font-size: 12px;
   }
 
   .detail-grid {

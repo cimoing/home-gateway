@@ -381,49 +381,60 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else class="detail-tab-panel">
-        <div class="file-heading">
-          <div>
+        <div class="file-heading file-selection-heading">
+          <div class="file-heading-meta">
             <h3>文件选择</h3>
             <p>
               保存到
               <code>{{ task.savePath || task.saveSubdir || '下载根目录' }}</code>
-              · 已选择 {{ selectedCount }} 个文件，共 {{ formatBytes(selectedBytes) }}
+              · 已选 {{ selectedCount }} 个，共 {{ formatBytes(selectedBytes) }}
             </p>
           </div>
-          <div class="file-heading-actions">
+          <div class="file-selection-toolbar">
+            <div class="file-selection-filters" role="group" aria-label="快速选择">
+              <button
+                type="button"
+                class="small-button secondary-button"
+                :disabled="busy || !files.length"
+                @click="selectAll"
+              >
+                全选
+              </button>
+              <button
+                type="button"
+                class="small-button secondary-button"
+                :disabled="busy || !files.length"
+                @click="selectNone"
+              >
+                全不选
+              </button>
+              <button
+                type="button"
+                class="small-button secondary-button"
+                :disabled="busy || !files.length"
+                title="只选择视频文件"
+                @click="selectVideosOnly"
+              >
+                仅视频
+              </button>
+              <button
+                type="button"
+                class="small-button secondary-button"
+                :disabled="busy || !files.length"
+                title="只选择 10MB 以上的文件"
+                @click="selectLargeFilesOnly"
+              >
+                ≥10MB
+              </button>
+            </div>
             <button
               type="button"
-              class="small-button secondary-button"
+              class="file-selection-save"
               :disabled="busy || !files.length"
-              @click="selectAll"
+              @click="save"
             >
-              全选
+              保存选择
             </button>
-            <button
-              type="button"
-              class="small-button secondary-button"
-              :disabled="busy || !files.length"
-              @click="selectNone"
-            >
-              全不选
-            </button>
-            <button
-              type="button"
-              class="small-button secondary-button"
-              :disabled="busy || !files.length"
-              @click="selectVideosOnly"
-            >
-              只下载视频
-            </button>
-            <button
-              type="button"
-              class="small-button secondary-button"
-              :disabled="busy || !files.length"
-              @click="selectLargeFilesOnly"
-            >
-              只下载 10MB 以上
-            </button>
-            <button :disabled="busy || !files.length" @click="save">保存选择</button>
           </div>
         </div>
         <p v-if="!files.length" class="empty-state">元数据尚未就绪。</p>
