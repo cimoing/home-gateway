@@ -27,6 +27,13 @@ storage:
     #     domain: ""
     #     port: 445
     #   secret: ${SMB_PASSWORD}
+    # On Raspberry Pi / similar ARM boards, userspace SMB (type: smb) is often
+    # CPU-bound by SMB3 signing (~10-20 MiB/s). Prefer host kernel CIFS mount
+    # bind-mounted into the container and declare it as type: local instead:
+    #   - name: nas
+    #     type: local
+    #     config:
+    #       root: /mnt/nas
     # - name: archive
     #   type: s3
     #   config:

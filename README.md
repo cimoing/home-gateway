@@ -229,6 +229,14 @@ API Token 建议最小权限：
 - 双栏对比任意两个后端并复制
 - 查看 / 手动触发 `storage.sync[]` 定时增量同步规则
 
+### 树莓派 / ARM 上的 SMB 吞吐
+
+容器内 `type: smb`（用户态 go-smb2）在 Raspberry Pi 4 上通常只有约 **10–20 MiB/s**：
+SoC 无 AES 硬件加速，SMB3 签名会打满 CPU；再叠 Docker 与多 worker 也突破不了这个量级。
+
+若需要接近千兆线速，请在**宿主机**用内核 CIFS 挂载 NAS，再 bind-mount 进容器，并以
+`type: local` 使用该路径（见 `compose.yml` / `config.example.yaml` 注释）。
+
 ## BT 下载（Transmission RPC）
 
 当 `bt.enable: true` 时，前端显示「BT 下载」模块；任务列表、进度与控制均通过

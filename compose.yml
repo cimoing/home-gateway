@@ -20,6 +20,14 @@ services:
     volumes:
       - ${CONFIG_DIR:-./config}:/config
       - ${DATA_DIR:-./data}:/data
+      # Fast path on Raspberry Pi: mount NAS with kernel CIFS on the host, then
+      # bind-mount it and use storage backend type: local (not type: smb).
+      # Example host mount:
+      #   mount -t cifs //192.168.1.10/media /mnt/nas \
+      #     -o credentials=/root/.smbcredentials,vers=3.1.1,cache=strict,rsize=1048576,wsize=1048576
+      # - /mnt/nas:/mnt/nas:rw
+    # Optional on Pi for less Docker NAT overhead (conflicts with published ports mapping style):
+    # network_mode: host
     networks:
       - default
     stop_grace_period: 30s

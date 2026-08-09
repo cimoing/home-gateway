@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,11 +15,24 @@ import (
 const (
 	// Large-file copy uses ranged I/O with a deep pipeline. go-smb2 caps each
 	// SMB READ/WRITE at 1 MiB, so buffer size matches that unit.
-	parallelCopyMinSize   = 8 << 20 // 8 MiB
-	parallelCopyWorkers   = 16
-	parallelCopyChunkSize = 1 << 20 // 1 MiB (= one SMB Large MTU write)
-	copyBufferSize        = 1 << 20
+	parallelCopyMinSize    = 8 << 20 // 8 MiB
+	parallelCopyMaxWorkers = 16
+	parallelCopyChunkSize  = 1 << 20 // 1 MiB (= one SMB Large MTU write)
+	copyBufferSize         = 1 << 20
 )
+
+// parallelCopyWorkers caps in-flight 1 MiB ops to the CPU core count.
+// SMB3 signing is often CPU-bound; more workers than cores only contend.
+func parallelCopyWorkers() int {
+	cores := runtime.GOMAXPROCS(0)
+	if cores < 1 {
+		cores = 1
+	}
+	if cores > parallelCopyMaxWorkers {
+		return parallelCopyMaxWorkers
+	}
+	return cores
+}
 
 var errParallelUnsupported = errors.New("parallel copy unsupported")
 
@@ -59,14 +73,14 @@ func copyParallel(
 		return err
 	}
 
-	workers := parallelCopyWorkers
+	workers := parallelCopyWorkers()
 	if size < parallelCopyChunkSize*int64(workers) {
 		workers = int((size + parallelCopyChunkSize - 1) / parallelCopyChunkSize)
 		if workers < 1 {
 			workers = 1
 		}
-		if workers > parallelCopyWorkers {
-			workers = parallelCopyWorkers
+		if workers > parallelCopyMaxWorkers {
+			workers = parallelCopyMaxWorkers
 		}
 	}
 
