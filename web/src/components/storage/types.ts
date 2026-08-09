@@ -70,6 +70,26 @@ export function formatBytes(value: number) {
   return `${(value / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`
 }
 
+export type PreviewKind = 'video' | 'image' | 'pdf'
+
+const PREVIEW_VIDEO_EXT = new Set(['mp4', 'webm', 'ogg', 'ogv', 'm4v', 'mov'])
+const PREVIEW_IMAGE_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'])
+const PREVIEW_PDF_EXT = new Set(['pdf'])
+
+export function fileExtension(name: string) {
+  const index = name.lastIndexOf('.')
+  if (index <= 0 || index === name.length - 1) return ''
+  return name.slice(index + 1).toLowerCase()
+}
+
+export function previewKindForName(name: string): PreviewKind | null {
+  const ext = fileExtension(name)
+  if (PREVIEW_VIDEO_EXT.has(ext)) return 'video'
+  if (PREVIEW_IMAGE_EXT.has(ext)) return 'image'
+  if (PREVIEW_PDF_EXT.has(ext)) return 'pdf'
+  return null
+}
+
 export function formatEndpoint(endpoint?: SyncEndpoint) {
   if (!endpoint?.name) return '—'
   const path = endpoint.path?.trim()

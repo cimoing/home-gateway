@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"path"
 	"strconv"
 	"strings"
 
@@ -160,21 +159,26 @@ func (h *Handler) download(c *gin.Context) {
 		return
 	}
 	filePath := c.Query("path")
+	inline := strings.EqualFold(c.Query("disposition"), "inline") ||
+		strings.EqualFold(c.Query("inline"), "1") ||
+		strings.EqualFold(c.Query("inline"), "true")
 	backend, err := h.service.OpenByName(c.Request.Context(), name)
 	if err != nil {
 		writeStorageError(c, err)
 		return
 	}
 	defer backend.Close()
-	reader, err := backend.Open(c.Request.Context(), filePath)
+	entry, err := backend.Stat(c.Request.Context(), filePath)
 	if err != nil {
 		writeStorageError(c, err)
 		return
 	}
-	defer reader.Close()
-	c.Header("Content-Disposition", `attachment; filename="`+path.Base(filePath)+`"`)
-	c.Status(http.StatusOK)
-	_, _ = io.Copy(c.Writer, reader)
+	if err := serveFileDownload(c.Writer, c.Request, backend, filePath, entry, inline); err != nil {
+		// Headers may already be written by ServeContent; only emit JSON when possible.
+		if !c.Writer.Written() {
+			writeStorageError(c, err)
+		}
+	}
 }
 
 func (h *Handler) upload(c *gin.Context) {

@@ -821,6 +821,31 @@ th {
   overflow-y: auto;
 }
 
+.file-preview {
+  width: min(100%, 1100px);
+}
+
+.file-preview-body {
+  margin-top: 16px;
+  min-height: 240px;
+}
+
+.file-preview-media {
+  display: block;
+  width: 100%;
+  max-height: min(72vh, 820px);
+  object-fit: contain;
+  background: #0b1220;
+}
+
+.file-preview-frame {
+  display: block;
+  width: 100%;
+  height: min(72vh, 820px);
+  border: 0;
+  background: #0b1220;
+}
+
 .task-detail h2,
 .file-heading h3 {
   margin: 0;

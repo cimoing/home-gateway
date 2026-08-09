@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { api } from '../../api/client'
-import type { StorageBackend, StorageEntry } from './types'
-import { formatBytes } from './types'
+import type { PreviewKind, StorageBackend, StorageEntry } from './types'
+import { formatBytes, previewKindForName } from './types'
 
 const props = defineProps<{ backends: StorageBackend[] }>()
 const backendName = ref('')
@@ -12,6 +12,11 @@ const busy = ref(false)
 const error = ref('')
 const message = ref('')
 const newDir = ref('')
+const preview = ref<{
+  name: string
+  kind: PreviewKind
+  url: string
+} | null>(null)
 
 const crumbs = computed(() => {
   if (!path.value) return [] as string[]
@@ -49,11 +54,34 @@ async function loadEntries() {
 }
 
 function openEntry(entry: StorageEntry) {
-  if (entry.isDir) path.value = entry.path
+  if (entry.isDir) {
+    path.value = entry.path
+    return
+  }
+  const kind = previewKindForName(entry.name)
+  if (kind) openPreview(entry, kind)
 }
 
 function goCrumb(index: number) {
   path.value = crumbs.value.slice(0, index + 1).join('/')
+}
+
+function fileURL(entry: StorageEntry, inline: boolean) {
+  const query = new URLSearchParams({ path: entry.path })
+  if (inline) query.set('disposition', 'inline')
+  return `/api/storage/backends/${encodeURIComponent(backendName.value)}/download?${query}`
+}
+
+function openPreview(entry: StorageEntry, kind: PreviewKind) {
+  preview.value = {
+    name: entry.name,
+    kind,
+    url: fileURL(entry, true),
+  }
+}
+
+function closePreview() {
+  preview.value = null
 }
 
 async function mkdir() {
@@ -104,11 +132,7 @@ async function upload(event: Event) {
 
 function download(entry: StorageEntry) {
   if (!backendName.value || entry.isDir) return
-  const query = new URLSearchParams({ path: entry.path })
-  window.open(
-    `/api/storage/backends/${encodeURIComponent(backendName.value)}/download?${query}`,
-    '_blank',
-  )
+  window.open(fileURL(entry, false), '_blank')
 }
 
 async function run(action: () => Promise<void>, success = '') {
@@ -130,7 +154,7 @@ async function run(action: () => Promise<void>, success = '') {
   <section class="panel">
     <div class="panel-heading">
       <h2>文件浏览</h2>
-      <p>在已配置的存储后端上浏览、上传与删除文件。</p>
+      <p>在已配置的存储后端上浏览、预览、上传与删除文件。</p>
     </div>
     <div class="file-toolbar">
       <select v-model="backendName">
@@ -166,14 +190,27 @@ async function run(action: () => Promise<void>, success = '') {
         <tbody>
           <tr v-for="entry in entries" :key="entry.path">
             <td class="content-cell">
-              <button v-if="entry.isDir" type="button" class="linkish" @click="openEntry(entry)">
-                {{ entry.name }}/
+              <button
+                v-if="entry.isDir || previewKindForName(entry.name)"
+                type="button"
+                class="linkish"
+                @click="openEntry(entry)"
+              >
+                {{ entry.isDir ? `${entry.name}/` : entry.name }}
               </button>
               <span v-else>{{ entry.name }}</span>
             </td>
             <td>{{ entry.isDir ? '—' : formatBytes(entry.size) }}</td>
             <td>{{ entry.modTime ? new Date(entry.modTime).toLocaleString() : '—' }}</td>
             <td class="task-actions">
+              <button
+                v-if="!entry.isDir && previewKindForName(entry.name)"
+                class="small-button secondary-button"
+                :disabled="busy"
+                @click="openPreview(entry, previewKindForName(entry.name)!)"
+              >
+                预览
+              </button>
               <button
                 v-if="!entry.isDir"
                 class="small-button secondary-button"
@@ -192,4 +229,47 @@ async function run(action: () => Promise<void>, success = '') {
       <p v-if="!entries.length" class="empty-state">当前目录为空。</p>
     </div>
   </section>
+
+  <div
+    v-if="preview"
+    class="detail-backdrop"
+    role="presentation"
+    @pointerdown.self="closePreview"
+  >
+    <section
+      class="panel task-detail file-preview"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="preview.name"
+    >
+      <header>
+        <div class="task-title-row">
+          <strong>{{ preview.name }}</strong>
+        </div>
+        <button class="small-button secondary-button" type="button" @click="closePreview">关闭</button>
+      </header>
+      <div class="file-preview-body">
+        <video
+          v-if="preview.kind === 'video'"
+          class="file-preview-media"
+          controls
+          playsinline
+          preload="metadata"
+          :src="preview.url"
+        />
+        <img
+          v-else-if="preview.kind === 'image'"
+          class="file-preview-media"
+          :src="preview.url"
+          :alt="preview.name"
+        />
+        <iframe
+          v-else
+          class="file-preview-frame"
+          title="PDF 预览"
+          :src="preview.url"
+        />
+      </div>
+    </section>
+  </div>
 </template>
