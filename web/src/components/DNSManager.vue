@@ -240,14 +240,16 @@ function contentPreview(record: RecordItem) {
               {{ zone.lastSyncedAt ? `刷新于 ${new Date(zone.lastSyncedAt).toLocaleString()}` : '尚未刷新' }}
             </span>
           </div>
-          <button class="small-button" :disabled="busy" @click="syncZone(zone)">刷新记录</button>
-          <button
-            class="small-button secondary-button"
-            :disabled="busy"
-            @click="selectedZoneName = zone.name; switchTab('records')"
-          >
-            查看记录
-          </button>
+          <div class="table-actions">
+            <button class="small-button" :disabled="busy" @click="syncZone(zone)">刷新</button>
+            <button
+              class="small-button secondary-button"
+              :disabled="busy"
+              @click="selectedZoneName = zone.name; switchTab('records')"
+            >
+              查看
+            </button>
+          </div>
         </article>
       </div>
     </div>
@@ -265,7 +267,7 @@ function contentPreview(record: RecordItem) {
         </label>
         <button
           v-if="selectedZone"
-          class="secondary-button"
+          class="secondary-button small-button"
           :disabled="busy"
           @click="syncZone(selectedZone)"
         >
